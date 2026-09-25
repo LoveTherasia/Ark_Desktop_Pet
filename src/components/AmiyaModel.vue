@@ -2,12 +2,15 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import { Spine } from 'pixi-spine'
-import skeletonUrl from '../assets/amiya/build_char_002_amiya.skel?url'
-import atlasUrl from '../assets/amiya/build_char_002_amiya.atlas?url'
-import textureUrl from '../assets/amiya/build_char_002_amiya.png?url'
+import skeletonUrl from '../assets/skadi/skadi_summer_3.skel?url'
+import atlasUrl from '../assets/skadi/skadi_summer_3.atlas?url'
+import textureUrl from '../assets/skadi/skadi_summer_3.png?url'
 
 const canvasHost = ref<HTMLDivElement | null>(null)
-const props = defineProps<{ interactionKey: number }>()
+const props = defineProps<{
+  interactionKey: number
+  pointerInteractionEnabled?: boolean
+}>()
 const loading = ref(true)
 const errorMessage = ref('')
 
@@ -53,7 +56,7 @@ function fitModel() {
 }
 
 function syncMouseEvents(event: MouseEvent) {
-  if (!app || !model || event.buttons !== 0) return
+  if (props.pointerInteractionEnabled === false || !app || !model || event.buttons !== 0) return
 
   const canvasBounds = app.view.getBoundingClientRect()
   const scaleX = app.screen.width / canvasBounds.width
@@ -71,6 +74,42 @@ function syncMouseEvents(event: MouseEvent) {
   }
 }
 
+function loadModel() {
+  if (!app) return
+
+  model?.parent?.removeChild(model)
+  model?.destroy({ children: true })
+  model = null
+  loading.value = true
+  errorMessage.value = ''
+
+  const loader = new PIXI.Loader()
+  loader.add('model', skeletonUrl, {
+    metadata: {
+      spineAtlasFile: atlasUrl,
+      image: PIXI.BaseTexture.from(textureUrl),
+    },
+  })
+  loader.load((_loader, resources) => {
+    const resource = resources.model
+    if (resource?.error || !resource?.spineData || !app) {
+      errorMessage.value = '人物模型加载失败，请确认文件完整'
+      loading.value = false
+      return
+    }
+
+    model = new Spine(resource.spineData)
+    model.autoUpdate = false
+    app.stage.addChild(model)
+    const animationName = getAnimationName(defaultAnimationNames)
+    if (animationName) {
+      model.state.setAnimation(0, animationName, true)
+    }
+    fitModel()
+    loading.value = false
+  })
+}
+
 onMounted(() => {
   if (!canvasHost.value) return
 
@@ -86,35 +125,11 @@ onMounted(() => {
   })
   canvasHost.value.appendChild(app.view as HTMLCanvasElement)
 
-  const loader = new PIXI.Loader()
-  loader.add('amiya', skeletonUrl, {
-    metadata: {
-      spineAtlasFile: atlasUrl,
-      image: PIXI.BaseTexture.from(textureUrl),
-    },
-  })
-  loader.load((_loader, resources) => {
-    const resource = resources.amiya
-    if (resource?.error || !resource?.spineData || !app) {
-      errorMessage.value = '阿米娅模型加载失败'
-      loading.value = false
-      return
-    }
-
-    model = new Spine(resource.spineData)
-    model.autoUpdate = false
-    app.stage.addChild(model)
-    tickerUpdate = () => {
-      model?.update(app?.ticker.deltaMS ? app.ticker.deltaMS / 1000 : 0)
-    }
-    app.ticker.add(tickerUpdate)
-    const animationName = getAnimationName(defaultAnimationNames)
-    if (animationName) {
-      model.state.setAnimation(0, animationName, true)
-    }
-    fitModel()
-    loading.value = false
-  })
+  tickerUpdate = () => {
+    model?.update(app?.ticker.deltaMS ? app.ticker.deltaMS / 1000 : 0)
+  }
+  app.ticker.add(tickerUpdate)
+  loadModel()
 })
 
 watch(() => props.interactionKey, playInteraction)
