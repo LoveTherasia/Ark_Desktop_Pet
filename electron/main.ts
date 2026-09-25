@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -23,6 +23,49 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 let win: BrowserWindow | null
+const windowDragOrigins = new Map<number, { pointerX: number; pointerY: number; windowX: number; windowY: number }>()
+
+ipcMain.on('show-context-menu', (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!targetWindow) return
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '关闭桌宠',
+      click: () => app.quit(),
+    },
+  ])
+
+  contextMenu.popup({ window: targetWindow })
+})
+
+ipcMain.on('window-drag-start', (event, pointerX: number, pointerY: number) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!targetWindow) return
+
+  const [windowX, windowY] = targetWindow.getPosition()
+  windowDragOrigins.set(event.sender.id, { pointerX, pointerY, windowX, windowY })
+})
+
+ipcMain.on('window-drag-move', (event, pointerX: number, pointerY: number) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  const origin = windowDragOrigins.get(event.sender.id)
+  if (!targetWindow || !origin) return
+
+  targetWindow.setPosition(
+    Math.round(origin.windowX + pointerX - origin.pointerX),
+    Math.round(origin.windowY + pointerY - origin.pointerY),
+  )
+})
+
+ipcMain.on('window-drag-end', (event) => {
+  windowDragOrigins.delete(event.sender.id)
+})
+
+ipcMain.on('set-ignore-mouse-events', (event, ignore: boolean) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  targetWindow?.setIgnoreMouseEvents(ignore, { forward: true })
+})
 
 function createWindow() {
   win = new BrowserWindow({
@@ -41,6 +84,7 @@ function createWindow() {
   })
 
   win.once('ready-to-show', () => win?.show())
+  win.setIgnoreMouseEvents(true, { forward: true })
 
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)

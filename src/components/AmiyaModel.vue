@@ -14,9 +14,10 @@ const errorMessage = ref('')
 let app: PIXI.Application | null = null
 let model: Spine | null = null
 let tickerUpdate: (() => void) | null = null
+let mouseEventsIgnored = true
 
 const defaultAnimationNames = ['Sit', 'Relax', 'Move', 'Default', 'Sleep']
-const modelScaleFactor = 0.4
+const modelScaleFactor = 0.3
 const modelOffsetY = 50
 
 function getAnimationName(preferredNames: string[]) {
@@ -51,8 +52,29 @@ function fitModel() {
   model.y = app.screen.height / 2 - (bounds.y + bounds.height / 2) * scale + modelOffsetY
 }
 
+function syncMouseEvents(event: MouseEvent) {
+  if (!app || !model || event.buttons !== 0) return
+
+  const canvasBounds = app.view.getBoundingClientRect()
+  const scaleX = app.screen.width / canvasBounds.width
+  const scaleY = app.screen.height / canvasBounds.height
+  const point = new PIXI.Point(
+    (event.clientX - canvasBounds.left) * scaleX,
+    (event.clientY - canvasBounds.top) * scaleY,
+  )
+  const overModel = model.getBounds().contains(point.x, point.y)
+  const shouldIgnore = !overModel
+
+  if (shouldIgnore !== mouseEventsIgnored) {
+    mouseEventsIgnored = shouldIgnore
+    window.ipcRenderer?.send('set-ignore-mouse-events', shouldIgnore)
+  }
+}
+
 onMounted(() => {
   if (!canvasHost.value) return
+
+  window.addEventListener('mousemove', syncMouseEvents)
 
   app = new PIXI.Application({
     width: 280,
@@ -106,6 +128,8 @@ onBeforeUnmount(() => {
   model = null
   app = null
   tickerUpdate = null
+  window.removeEventListener('mousemove', syncMouseEvents)
+  mouseEventsIgnored = true
 })
 </script>
 

@@ -23,10 +23,7 @@ button { font: inherit; }
 
 .pet-card {
   overflow: hidden;
-  border: 1px solid rgba(47, 58, 74, 0.2);
-  border-radius: 18px;
-  background: linear-gradient(155deg, rgba(255, 252, 241, 0.98), rgba(235, 239, 231, 0.96));
-  box-shadow: 0 18px 45px rgba(37, 43, 54, 0.24);
+  background: transparent;
 }
 
 .pet-header, .pet-info {
@@ -35,6 +32,7 @@ button { font: inherit; }
   justify-content: space-between;
   -webkit-app-region: drag;
   cursor: move;
+  opacity: 0;
 }
 
 .pet-header {
@@ -61,9 +59,11 @@ button { font: inherit; }
   width: 100%;
   height: 240px;
   border: 0;
-  background: radial-gradient(circle at 50% 42%, #f8edd4 0 28%, transparent 29%), #d9e1d7;
+  background: transparent;
   -webkit-app-region: no-drag;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
 .pet-stage:active { cursor: grabbing; }
@@ -140,7 +140,7 @@ button { font: inherit; }
 
 .pet-info {
   padding: 14px 16px 16px;
-  background: rgba(255, 252, 241, 0.72);
+  background: transparent;
 }
 
 .pet-label {
