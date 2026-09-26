@@ -33,10 +33,93 @@ const characterBrowserOpen = ref(false)
 const localModels = ref<LocalModel[]>([])
 const selectedCharacter = ref<LocalModel | null>(null)
 const characterLoading = ref(false)
+
+/** 自主走动：空闲一段时间后随机走一小段；距离与朝向由主进程按屏幕工作区计算。 */
+const walkFirstDelayMs = 5000
+const walkIntervalMinMs = 9000
+const walkIntervalMaxMs = 22000
+
+const walking = ref(false)
+const facingLeft = ref(false)
+let walkScheduleTimer: number | null = null
+let walkFallbackTimer: number | null = null
+
 let hasDragged = false
 let dragPointerId: number | null = null
 let dragStartX = 0
 let dragStartY = 0
+
+function clearWalkTimers() {
+  if (walkScheduleTimer !== null) {
+    window.clearTimeout(walkScheduleTimer)
+    walkScheduleTimer = null
+  }
+  if (walkFallbackTimer !== null) {
+    window.clearTimeout(walkFallbackTimer)
+    walkFallbackTimer = null
+  }
+}
+
+function randomWalkDelay() {
+  return walkIntervalMinMs + Math.random() * (walkIntervalMaxMs - walkIntervalMinMs)
+}
+
+function scheduleWalk(delay = randomWalkDelay()) {
+  if (walkScheduleTimer !== null) window.clearTimeout(walkScheduleTimer)
+  walkScheduleTimer = window.setTimeout(() => { void tryWalk() }, delay)
+}
+
+/** 走动自然结束（或兜底超时）：复位状态并安排下一次。 */
+function finishWalk() {
+  if (walkFallbackTimer !== null) {
+    window.clearTimeout(walkFallbackTimer)
+    walkFallbackTimer = null
+  }
+  walking.value = false
+  scheduleWalk()
+}
+
+/** 用户介入（点击、拖拽、右键菜单、打开弹窗）：立刻停下脚步。 */
+function stopWalking() {
+  if (walkFallbackTimer !== null) {
+    window.clearTimeout(walkFallbackTimer)
+    walkFallbackTimer = null
+  }
+  if (walking.value) {
+    walking.value = false
+    window.ipcRenderer?.send('walk-stop')
+  }
+  scheduleWalk()
+}
+
+async function tryWalk() {
+  walkScheduleTimer = null
+
+  if (walking.value || modelBrowserOpen.value || characterBrowserOpen.value) {
+    scheduleWalk()
+    return
+  }
+
+  try {
+    const started = await window.ipcRenderer.invoke('walk-start') as
+      { direction: 'left' | 'right'; durationMs: number } | null
+    if (!started) {
+      scheduleWalk()
+      return
+    }
+
+    facingLeft.value = started.direction === 'left'
+    walking.value = true
+    // 兜底：万一 walk-end 没送达，走动时长结束后自行复位
+    walkFallbackTimer = window.setTimeout(finishWalk, started.durationMs + 500)
+  } catch {
+    scheduleWalk()
+  }
+}
+
+function handleWalkEnd() {
+  finishWalk()
+}
 
 function interact() {
   if (hasDragged) {
@@ -44,6 +127,8 @@ function interact() {
     return
   }
 
+  // 被摸到时先停下脚步，避免 Move 与交互动画抢占同一条轨道
+  stopWalking()
   interactionCount.value += 1
   mood.value = interactionCount.value % 2 === 0 ? '心情不错' : '被摸到了'
 }
@@ -89,6 +174,7 @@ function endWindowDrag(event: PointerEvent) {
 }
 
 function openContextMenu() {
+  stopWalking()
   window.ipcRenderer?.send('show-context-menu')
 }
 
@@ -101,6 +187,7 @@ function setMouseEventsIgnored(ignore: boolean) {
 }
 
 function openModelBrowser() {
+  stopWalking()
   modelBrowserOpen.value = true
   modelMessage.value = ''
   modelError.value = ''
@@ -113,6 +200,7 @@ function closeModelBrowser() {
   selectedModel.value = null
   setMouseEventsIgnored(true)
   resizeWindow(320, 380)
+  scheduleWalk()
 }
 
 async function refreshLocalModels() {
@@ -124,6 +212,7 @@ async function refreshLocalModels() {
 }
 
 function openCharacterBrowser() {
+  stopWalking()
   characterBrowserOpen.value = true
   selectedCharacter.value = null
   modelError.value = ''
@@ -138,6 +227,7 @@ function closeCharacterBrowser() {
   selectedCharacter.value = null
   setMouseEventsIgnored(true)
   resizeWindow(320, 380)
+  scheduleWalk()
 }
 
 async function confirmCharacterChange() {
@@ -202,11 +292,16 @@ function handleOpenCharacterBrowser() {
 onMounted(() => {
   window.ipcRenderer?.on('open-model-browser', handleOpenModelBrowser)
   window.ipcRenderer?.on('open-character-browser', handleOpenCharacterBrowser)
+  window.ipcRenderer?.on('walk-end', handleWalkEnd)
+  scheduleWalk(walkFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
   window.ipcRenderer?.off('open-model-browser', handleOpenModelBrowser)
   window.ipcRenderer?.off('open-character-browser', handleOpenCharacterBrowser)
+  window.ipcRenderer?.off('walk-end', handleWalkEnd)
+  clearWalkTimers()
+  if (walking.value) window.ipcRenderer?.send('walk-stop')
 })
 
 void interact
@@ -234,13 +329,15 @@ void openContextMenu
         <AmiyaModel
           :interaction-key="interactionCount"
           :pointer-interaction-enabled="!modelBrowserOpen && !characterBrowserOpen"
+          :walking="walking"
+          :facing-left="facingLeft"
         />
       </button>
 
       <div class="pet-info">
         <div>
           <p class="pet-label">当前状态</p>
-          <strong>{{ mood }}</strong>
+          <strong>{{ walking ? '散步中' : mood }}</strong>
         </div>
         <span class="interaction-count">互动 {{ interactionCount }}</span>
       </div>

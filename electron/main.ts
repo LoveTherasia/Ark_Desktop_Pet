@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, screen } from 'electron'
 import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -30,6 +30,80 @@ const modelBranch = 'main'
 type ModelTreeEntry = { path: string; type: string; url: string; size?: number }
 type LocalModel = { name: string; skeleton: string; atlas: string; texture: string }
 let modelTree: ModelTreeEntry[] = []
+
+// ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
+const walkSpeedPxPerSecond = 60
+const walkTickMs = 16
+const walkMinDistancePx = 80
+const walkMaxDistancePx = 320
+
+type WalkSession = {
+  timer: ReturnType<typeof setInterval>
+  fromX: number
+  toX: number
+  y: number
+  startedAt: number
+  durationMs: number
+}
+let walkSession: WalkSession | null = null
+
+function endWalk(notify: boolean) {
+  if (!walkSession) return
+
+  clearInterval(walkSession.timer)
+  walkSession = null
+  if (notify && win && !win.isDestroyed()) {
+    win.webContents.send('walk-end')
+  }
+}
+
+/**
+ * 在工作区内随机走一小段，返回朝向与时长给渲染层用于播放 Move 动画。
+ * 距离会被左右剩余空间夹住，因此窗口不会走出屏幕。
+ */
+function beginWalk(): { direction: 'left' | 'right'; durationMs: number } | null {
+  if (!win || win.isDestroyed() || walkSession) return null
+
+  const bounds = win.getBounds()
+  const { workArea } = screen.getDisplayMatching(bounds)
+  const maxX = workArea.x + workArea.width - bounds.width
+  if (maxX <= workArea.x) return null
+
+  const leftRoom = bounds.x - workArea.x
+  const rightRoom = maxX - bounds.x
+
+  let direction: 'left' | 'right'
+  if (leftRoom >= walkMinDistancePx && rightRoom >= walkMinDistancePx) {
+    direction = Math.random() < 0.5 ? 'left' : 'right'
+  } else {
+    direction = rightRoom > leftRoom ? 'right' : 'left'
+  }
+
+  const room = direction === 'left' ? leftRoom : rightRoom
+  const wanted = walkMinDistancePx + Math.random() * (walkMaxDistancePx - walkMinDistancePx)
+  const distance = Math.round(Math.min(room, wanted))
+  if (distance <= 0) return null
+
+  const fromX = bounds.x
+  const y = bounds.y
+  const toX = Math.round(direction === 'left' ? fromX - distance : fromX + distance)
+  const durationMs = Math.max(1, Math.round((distance / walkSpeedPxPerSecond) * 1000))
+  const startedAt = Date.now()
+
+  const timer = setInterval(() => {
+    if (!win || win.isDestroyed()) {
+      endWalk(false)
+      return
+    }
+
+    const progress = Math.min(1, (Date.now() - startedAt) / durationMs)
+    win.setPosition(Math.round(fromX + (toX - fromX) * progress), y)
+    if (progress >= 1) endWalk(true)
+  }, walkTickMs)
+
+  walkSession = { timer, fromX, toX, y, startedAt, durationMs }
+  return { direction, durationMs }
+}
 
 async function listLocalModels(): Promise<LocalModel[]> {
   const assetsDirectory = path.join(process.env.APP_ROOT, 'src', 'assets')
@@ -225,9 +299,16 @@ ipcMain.on('show-context-menu', (event) => {
   contextMenu.popup({ window: targetWindow })
 })
 
+ipcMain.handle('walk-start', () => beginWalk())
+
+ipcMain.on('walk-stop', () => endWalk(false))
+
 ipcMain.on('window-drag-start', (event, pointerX: number, pointerY: number) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender)
   if (!targetWindow) return
+
+  // 用户接管拖拽时立刻停止自主走动，位置基准才不会被走动带偏
+  endWalk(true)
 
   const [windowX, windowY] = targetWindow.getPosition()
   windowDragOrigins.set(event.sender.id, { pointerX, pointerY, windowX, windowY })
@@ -255,7 +336,22 @@ ipcMain.on('set-ignore-mouse-events', (event, ignore: boolean) => {
 
 ipcMain.on('resize-window', (event, width: number, height: number) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender)
-  targetWindow?.setSize(Math.round(width), Math.round(height))
+  if (!targetWindow) return
+
+  endWalk(true)
+  targetWindow.setSize(Math.round(width), Math.round(height))
+
+  // 放大到弹窗尺寸后可能越出屏幕，夹回当前显示器的工作区
+  const bounds = targetWindow.getBounds()
+  const { workArea } = screen.getDisplayMatching(bounds)
+  const maxX = Math.max(workArea.x, workArea.x + workArea.width - bounds.width)
+  const maxY = Math.max(workArea.y, workArea.y + workArea.height - bounds.height)
+  const clampedX = Math.min(Math.max(bounds.x, workArea.x), maxX)
+  const clampedY = Math.min(Math.max(bounds.y, workArea.y), maxY)
+
+  if (clampedX !== bounds.x || clampedY !== bounds.y) {
+    targetWindow.setPosition(clampedX, clampedY)
+  }
 })
 
 function createWindow() {

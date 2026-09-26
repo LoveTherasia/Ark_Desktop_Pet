@@ -10,6 +10,8 @@ const canvasHost = ref<HTMLDivElement | null>(null)
 const props = defineProps<{
   interactionKey: number
   pointerInteractionEnabled?: boolean
+  walking?: boolean
+  facingLeft?: boolean
 }>()
 const loading = ref(true)
 const errorMessage = ref('')
@@ -19,8 +21,13 @@ let model: Spine | null = null
 let tickerUpdate: (() => void) | null = null
 let mouseEventsIgnored = true
 let pendingRefit = false
+let baseScale = 1
+let fitBounds: PIXI.Rectangle | null = null
+let playingAnimation = ''
 
 const defaultAnimationNames = ['Sit', 'Relax', 'Move', 'Default', 'Sleep']
+/** 走动时循环播放的动画；Move 的默认朝向是向右，向左走时用水平翻转。 */
+const walkAnimationName = 'Move'
 
 /** 模型在可用区域内的占比，数值越大人物越大（1 表示撑满可用区域）。 */
 const modelFillRatio = 0.8
@@ -43,6 +50,36 @@ function getAnimationName(preferredNames: string[]) {
   return preferredNames.find((name) => availableNames.includes(name)) ?? availableNames[0]
 }
 
+function hasAnimation(name: string) {
+  return model?.spineData.animations.some((animation) => animation.name === name) ?? false
+}
+
+function setAnimation(name: string, loop: boolean) {
+  if (!model) return
+
+  model.state.setAnimation(0, name, loop)
+  playingAnimation = name
+}
+
+function playIdleAnimation() {
+  const animationName = getAnimationName(defaultAnimationNames)
+  if (animationName) setAnimation(animationName, true)
+}
+
+function playWalkAnimation() {
+  if (!hasAnimation(walkAnimationName)) {
+    playIdleAnimation()
+    return
+  }
+
+  setAnimation(walkAnimationName, true)
+}
+
+function applyAnimationState() {
+  if (props.walking) playWalkAnimation()
+  else playIdleAnimation()
+}
+
 function playInteraction() {
   if (!model) return
 
@@ -50,10 +87,24 @@ function playInteraction() {
   const defaultName = getAnimationName(defaultAnimationNames)
   if (!interactionName) return
 
-  model.state.setAnimation(0, interactionName, false)
-  if (defaultName) {
-    model.state.addAnimation(0, defaultName, true, 0)
+  setAnimation(interactionName, false)
+  const followUpName = props.walking && hasAnimation(walkAnimationName) ? walkAnimationName : defaultName
+  if (followUpName) {
+    model.state.addAnimation(0, followUpName, true, 0)
   }
+}
+
+/**
+ * 水平翻转用负的 scale.x 实现；定位公式同样使用带符号的缩放，
+ * 这样镜像之后人物中心依旧落在画布中心，不会跑偏。
+ */
+function applyModelTransform() {
+  if (!app || !model || !fitBounds) return
+
+  const signedScale = props.facingLeft ? -baseScale : baseScale
+  model.scale.set(signedScale, baseScale)
+  model.x = app.screen.width / 2 - (fitBounds.x + fitBounds.width / 2) * signedScale
+  model.y = app.screen.height / 2 - (fitBounds.y + fitBounds.height / 2) * baseScale + modelOffsetY
 }
 
 function fitModel() {
@@ -79,11 +130,10 @@ function fitModel() {
   const availableWidth = app.screen.width * 0.82
   const availableHeight = app.screen.height * 0.9
   const fitScale = Math.min(availableWidth / bounds.width, availableHeight / bounds.height)
-  const scale = fitScale * modelFillRatio * currentModelScale()
+  baseScale = fitScale * modelFillRatio * currentModelScale()
+  fitBounds = bounds
 
-  model.scale.set(scale)
-  model.x = app.screen.width / 2 - (bounds.x + bounds.width / 2) * scale
-  model.y = app.screen.height / 2 - (bounds.y + bounds.height / 2) * scale + modelOffsetY
+  applyModelTransform()
 }
 
 function syncMouseEvents(event: MouseEvent) {
@@ -114,6 +164,8 @@ function loadModel() {
   loading.value = true
   errorMessage.value = ''
   pendingRefit = false
+  fitBounds = null
+  playingAnimation = ''
 
   const loader = new PIXI.Loader()
   loader.add('model', skeletonUrl, {
@@ -133,11 +185,8 @@ function loadModel() {
     model = new Spine(resource.spineData)
     model.autoUpdate = false
     app.stage.addChild(model)
-    const animationName = getAnimationName(defaultAnimationNames)
-    if (animationName) {
-      model.state.setAnimation(0, animationName, true)
-    }
     fitModel()
+    applyAnimationState()
     // 下一帧动画姿态真实推进后再校准一次，避免用第 0 帧姿态定死缩放。
     pendingRefit = true
     loading.value = false
@@ -173,6 +222,18 @@ onMounted(() => {
 })
 
 watch(() => props.interactionKey, playInteraction)
+
+watch(() => props.walking, (isWalking) => {
+  if (isWalking) {
+    playWalkAnimation()
+    return
+  }
+
+  // 走动结束时回到待机；若此刻正在播交互动作则不要抢占轨道
+  if (playingAnimation === walkAnimationName) playIdleAnimation()
+})
+
+watch(() => props.facingLeft, applyModelTransform)
 
 onBeforeUnmount(() => {
   if (app && tickerUpdate) {
