@@ -48,6 +48,10 @@ button { font: inherit; }
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 20px;
+  /* 标题栏作为窗口拖拽手柄：拖动移动整个桌宠窗口 */
+  cursor: move;
+  touch-action: none;
+  user-select: none;
 }
 
 .model-browser-kicker,

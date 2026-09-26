@@ -248,12 +248,25 @@ void openContextMenu
 
     <div v-if="modelBrowserOpen" class="model-browser" role="dialog" aria-label="获取模型">
       <div class="model-browser-panel">
-        <header class="model-browser-header">
+        <header
+          class="model-browser-header"
+          title="按住拖动可移动窗口"
+          @pointerdown="startWindowDrag"
+          @pointermove="moveWindow"
+          @pointerup="endWindowDrag"
+          @pointercancel="endWindowDrag"
+        >
           <div>
             <p class="model-browser-kicker">ARK MODELS</p>
             <h1>获取桌宠模型</h1>
           </div>
-          <button class="icon-button" type="button" aria-label="关闭模型获取窗口" @click="closeModelBrowser">×</button>
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="关闭模型获取窗口"
+            @pointerdown.stop
+            @click="closeModelBrowser"
+          >×</button>
         </header>
 
         <form class="model-search" @submit.prevent="searchModels">
@@ -292,12 +305,25 @@ void openContextMenu
 
     <div v-if="characterBrowserOpen" class="model-browser" role="dialog" aria-label="更换人物">
       <div class="model-browser-panel">
-        <header class="model-browser-header">
+        <header
+          class="model-browser-header"
+          title="按住拖动可移动窗口"
+          @pointerdown="startWindowDrag"
+          @pointermove="moveWindow"
+          @pointerup="endWindowDrag"
+          @pointercancel="endWindowDrag"
+        >
           <div>
             <p class="model-browser-kicker">LOCAL MODELS</p>
             <h1>更换人物</h1>
           </div>
-          <button class="icon-button" type="button" aria-label="关闭人物选择窗口" @click="closeCharacterBrowser">×</button>
+          <button
+            class="icon-button"
+            type="button"
+            aria-label="关闭人物选择窗口"
+            @pointerdown.stop
+            @click="closeCharacterBrowser"
+          >×</button>
         </header>
 
         <p v-if="!localModels.length" class="model-message-success">src/assets 中还没有可用的模型文件夹。</p>
