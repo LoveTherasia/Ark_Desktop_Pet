@@ -333,3 +333,134 @@ button { font: inherit; }
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-4px); }
 }
+
+/* ---- 设置页 ---- */
+
+.settings-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.settings-preview {
+  flex: 0 0 auto;
+  width: 168px;
+}
+
+.settings-preview-canvas {
+  width: 168px;
+  height: 144px;
+  overflow: hidden;
+  border: 1px solid #e0e5dc;
+  border-radius: 10px;
+  background: #f7f9f3;
+}
+
+.settings-preview-label {
+  margin: 6px 0 0;
+  color: #7d8478;
+  font-family: 'Trebuchet MS', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-align: center;
+}
+
+.settings-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-name {
+  margin: 0;
+  color: #252b36;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.settings-appellation {
+  margin: 2px 0 12px;
+  color: #7d8478;
+  font-family: 'Trebuchet MS', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+}
+
+.settings-fields {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.settings-fields > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px dashed #e6eae0;
+  padding-bottom: 4px;
+}
+
+.settings-fields dt {
+  flex: 0 0 auto;
+  color: #7d8478;
+  font-size: 11px;
+}
+
+.settings-fields dd {
+  overflow: hidden;
+  margin: 0;
+  color: #252b36;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-fields dd.settings-resource {
+  font-family: 'Trebuchet MS', sans-serif;
+  font-size: 11px;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #e0e5dc;
+}
+
+.settings-tabs button {
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  color: #7d8478;
+  background: transparent;
+  cursor: pointer;
+  font: 600 13px 'Trebuchet MS', sans-serif;
+}
+
+.settings-tabs button.active {
+  border-bottom-color: #c47758;
+  color: #c47758;
+}
+
+.settings-hint {
+  margin: 0 0 10px;
+  color: #647060;
+  font-size: 12px;
+}
+
+.settings-badge {
+  margin-left: 6px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #647060;
+  background: #e9eee5;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* 设置页顶部有预览占位，列表高度收紧一些 */
+.model-browser-panel .model-results {
+  max-height: 190px;
+}

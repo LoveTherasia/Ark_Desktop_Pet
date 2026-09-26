@@ -1,30 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AmiyaModel from './components/AmiyaModel.vue'
-
-interface LocalModel {
-  name: string
-  skeleton: string
-  atlas: string
-  texture: string
-}
+import SettingsPanel from './components/SettingsPanel.vue'
 
 const interactionCount = ref(0)
 const mood = ref('待机中')
-const modelMessage = ref('')
-const modelError = ref('')
-const characterBrowserOpen = ref(false)
-const localModels = ref<LocalModel[]>([])
-const characterQuery = ref('')
-const selectedCharacter = ref<LocalModel | null>(null)
-const characterLoading = ref(false)
 
-/** 本地模型按“角色/皮肤”筛选（纯本地过滤，不访问网络）。 */
-const filteredModels = computed(() => {
-  const query = characterQuery.value.trim().toLowerCase()
-  if (!query) return localModels.value
-  return localModels.value.filter((model) => model.name.toLowerCase().includes(query))
-})
+// ---- 设置页：只负责开关，页面内部逻辑见 SettingsPanel.vue ----
+const settingsOpen = ref(false)
 
 /** 自主走动：空闲一段时间后随机走一小段；距离与朝向由主进程按屏幕工作区计算。 */
 const walkFirstDelayMs = 5000
@@ -87,7 +70,7 @@ function stopWalking() {
 async function tryWalk() {
   walkScheduleTimer = null
 
-  if (walking.value || characterBrowserOpen.value) {
+  if (walking.value || settingsOpen.value) {
     scheduleWalk()
     return
   }
@@ -170,67 +153,28 @@ function openContextMenu() {
   window.ipcRenderer?.send('show-context-menu')
 }
 
-function resizeWindow(width: number, height: number) {
-  window.ipcRenderer?.send('resize-window', width, height)
-}
-
-function setMouseEventsIgnored(ignore: boolean) {
-  window.ipcRenderer?.send('set-ignore-mouse-events', ignore)
-}
-
-async function refreshLocalModels() {
-  try {
-    localModels.value = await window.ipcRenderer.invoke('list-local-models') as LocalModel[]
-  } catch {
-    localModels.value = []
-  }
-}
-
-function openCharacterBrowser() {
+function openSettings() {
   stopWalking()
-  characterBrowserOpen.value = true
-  selectedCharacter.value = null
-  characterQuery.value = ''
-  modelError.value = ''
-  modelMessage.value = ''
-  setMouseEventsIgnored(false)
-  resizeWindow(620, 620)
-  void refreshLocalModels()
+  settingsOpen.value = true
 }
 
-function closeCharacterBrowser() {
-  characterBrowserOpen.value = false
-  selectedCharacter.value = null
-  setMouseEventsIgnored(true)
-  resizeWindow(320, 380)
+function closeSettings() {
+  settingsOpen.value = false
   scheduleWalk()
 }
 
-async function confirmCharacterChange() {
-  if (!selectedCharacter.value) return
-
-  characterLoading.value = true
-  modelError.value = ''
-  try {
-    await window.ipcRenderer.invoke('activate-local-model', selectedCharacter.value.name)
-  } catch (error) {
-    modelError.value = error instanceof Error ? error.message : '更换人物失败'
-    characterLoading.value = false
-  }
-}
-
-function handleOpenCharacterBrowser() {
-  openCharacterBrowser()
+function handleOpenSettings() {
+  openSettings()
 }
 
 onMounted(() => {
-  window.ipcRenderer?.on('open-character-browser', handleOpenCharacterBrowser)
+  window.ipcRenderer?.on('open-settings', handleOpenSettings)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
   scheduleWalk(walkFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
-  window.ipcRenderer?.off('open-character-browser', handleOpenCharacterBrowser)
+  window.ipcRenderer?.off('open-settings', handleOpenSettings)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
   clearWalkTimers()
   if (walking.value) window.ipcRenderer?.send('walk-stop')
@@ -260,7 +204,7 @@ void openContextMenu
       >
         <AmiyaModel
           :interaction-key="interactionCount"
-          :pointer-interaction-enabled="!characterBrowserOpen"
+          :pointer-interaction-enabled="!settingsOpen"
           :walking="walking"
           :facing-left="facingLeft"
         />
@@ -275,68 +219,13 @@ void openContextMenu
       </div>
     </section>
 
-    <div v-if="characterBrowserOpen" class="model-browser" role="dialog" aria-label="更换人物">
-      <div class="model-browser-panel">
-        <header
-          class="model-browser-header"
-          title="按住拖动可移动窗口"
-          @pointerdown="startWindowDrag"
-          @pointermove="moveWindow"
-          @pointerup="endWindowDrag"
-          @pointercancel="endWindowDrag"
-        >
-          <div>
-            <p class="model-browser-kicker">LOCAL MODELS</p>
-            <h1>更换人物</h1>
-          </div>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="关闭人物选择窗口"
-            @pointerdown.stop
-            @click="closeCharacterBrowser"
-          >×</button>
-        </header>
-
-        <form class="model-search" @submit.prevent>
-          <input
-            v-model="characterQuery"
-            type="search"
-            placeholder="按角色或皮肤筛选，例如 阿米娅"
-            aria-label="筛选本地模型"
-          />
-        </form>
-
-        <p v-if="modelError" class="model-message-error">{{ modelError }}</p>
-        <p v-else-if="modelMessage" class="model-message-success">{{ modelMessage }}</p>
-
-        <p v-if="!localModels.length" class="model-message-success">src/assets 中还没有可用的模型文件夹。</p>
-        <p v-else-if="!filteredModels.length" class="model-message-success">没有匹配的本地模型。</p>
-        <div v-else class="model-results">
-          <button
-            v-for="model in filteredModels"
-            :key="model.name"
-            class="model-option"
-            :class="{ selected: selectedCharacter?.name === model.name }"
-            type="button"
-            @click="selectedCharacter = model"
-          >
-            <span class="model-option-name">{{ model.name }}</span>
-            <span class="model-option-meta">{{ selectedCharacter?.name === model.name ? '已选择' : '选择' }}</span>
-          </button>
-        </div>
-
-        <div v-if="selectedCharacter" class="model-selection">
-          <div>
-            <p class="model-selection-label">确认更换为</p>
-            <strong>{{ selectedCharacter.name }}</strong>
-          </div>
-          <button type="button" :disabled="characterLoading" @click="confirmCharacterChange">
-            {{ characterLoading ? '修改中' : '确认更换' }}
-          </button>
-        </div>
-      </div>
-    </div>
+    <SettingsPanel
+      v-if="settingsOpen"
+      :start-drag="startWindowDrag"
+      :move-drag="moveWindow"
+      :end-drag="endWindowDrag"
+      @close="closeSettings"
+    />
 
   </main>
 </template>

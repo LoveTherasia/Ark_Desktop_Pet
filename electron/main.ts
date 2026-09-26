@@ -25,7 +25,29 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 let win: BrowserWindow | null
 const windowDragOrigins = new Map<number, { pointerX: number; pointerY: number; windowX: number; windowY: number }>()
-type LocalModel = { name: string; skeleton: string; atlas: string; texture: string }
+
+/** models_data.json 中的角色/皮肤元数据，用于设置页展示与分组。 */
+type ModelInfo = {
+  key: string
+  assetId: string
+  name: string
+  appellation: string
+  type: string
+  style: string
+  skinGroupId: string
+  skinGroupName: string
+  sortTags: string[]
+}
+type LocalModel = {
+  /** 相对 src/assets 的路径：<角色>/<皮肤> */
+  name: string
+  character: string
+  skin: string
+  skeleton: string
+  atlas: string
+  texture: string
+  info: ModelInfo | null
+}
 
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
 const petWindowWidth = 320
@@ -103,8 +125,56 @@ function beginWalk(): { direction: 'left' | 'right'; durationMs: number } | null
   return { direction, durationMs }
 }
 
+// 下载时对文件/目录名做过不安全字符替换，比对 models_data.json 时要套用同一规则
+const unsafeModelNamePattern = /[\\/:*?"<>|#%\u0000-\u001f]/g
+function sanitizeModelName(value: string) {
+  return String(value ?? '').replace(unsafeModelNamePattern, '_').replace(/\s+/g, ' ').trim()
+}
+function stripExtension(value: string) {
+  return value.replace(/\.[a-z0-9]+$/i, '')
+}
+
+let modelInfoIndex: Map<string, ModelInfo> | null = null
+
+/** 以「骨架资源名（去扩展名，忽略大小写）」为键索引 models_data.json。 */
+async function getModelInfoIndex(): Promise<Map<string, ModelInfo>> {
+  if (modelInfoIndex) return modelInfoIndex
+
+  const index = new Map<string, ModelInfo>()
+  const indexPath = path.join(process.env.APP_ROOT, 'src', 'assets', 'models_data.json')
+  const raw = await readFile(indexPath, 'utf8').catch(() => '')
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { data?: Record<string, Record<string, unknown>> }
+      for (const [key, meta] of Object.entries(parsed.data ?? {})) {
+        const info: ModelInfo = {
+          key,
+          assetId: String(meta.assetId ?? ''),
+          name: String(meta.name ?? ''),
+          appellation: String(meta.appellation ?? ''),
+          type: String(meta.type ?? ''),
+          style: String(meta.style ?? ''),
+          skinGroupId: String(meta.skinGroupId ?? ''),
+          skinGroupName: String(meta.skinGroupName ?? ''),
+          sortTags: Array.isArray(meta.sortTags) ? meta.sortTags.map(String) : [],
+        }
+        for (const fileName of Object.values((meta.assetList ?? {}) as Record<string, string>)) {
+          index.set(stripExtension(sanitizeModelName(fileName)).toLowerCase(), info)
+        }
+      }
+    } catch {
+      // 索引损坏时退化为不显示元数据，不影响模型切换
+    }
+  }
+
+  modelInfoIndex = index
+  return index
+}
+
 async function listLocalModels(): Promise<LocalModel[]> {
   const assetsDirectory = path.join(process.env.APP_ROOT, 'src', 'assets')
+  const infoIndex = await getModelInfoIndex()
   const models: LocalModel[] = []
 
   const characterEntries = await readdir(assetsDirectory, { withFileTypes: true }).catch(() => [])
@@ -121,12 +191,14 @@ async function listLocalModels(): Promise<LocalModel[]> {
       const atlas = files.find((file) => file.toLowerCase().endsWith('.atlas'))
       const texture = files.find((file) => file.toLowerCase().endsWith('.png'))
       if (skeleton && atlas && texture) {
-        // name 就是相对 src/assets 的路径：<角色>/<皮肤>
         models.push({
           name: `${characterEntry.name}/${skinEntry.name}`,
+          character: characterEntry.name,
+          skin: skinEntry.name,
           skeleton,
           atlas,
           texture,
+          info: infoIndex.get(stripExtension(sanitizeModelName(skeleton)).toLowerCase()) ?? null,
         })
       }
     }
@@ -135,7 +207,23 @@ async function listLocalModels(): Promise<LocalModel[]> {
   return models.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'))
 }
 
+/** 当前生效的模型由 AmiyaModel.vue 顶部三行导入决定，这里反解出 <角色>/<皮肤>。 */
+async function readActiveModelName(): Promise<string> {
+  const componentPath = path.join(process.env.APP_ROOT, 'src', 'components', 'AmiyaModel.vue')
+  const source = await readFile(componentPath, 'utf8').catch(() => '')
+  const matched = source.match(/import skeletonUrl from '\.\.\/assets\/(.+)\/[^/']+\?url'/)
+  return matched ? matched[1] : ''
+}
+
 ipcMain.handle('list-local-models', () => listLocalModels())
+
+ipcMain.handle('current-model', async () => {
+  const activeName = await readActiveModelName()
+  if (!activeName) return null
+
+  const models = await listLocalModels()
+  return models.find((model) => model.name === activeName) ?? null
+})
 
 ipcMain.handle('activate-local-model', async (event, modelName: string) => {
   const models = await listLocalModels()
@@ -193,8 +281,8 @@ ipcMain.on('show-context-menu', (event) => {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: '更换人物',
-      click: () => targetWindow.webContents.send('open-character-browser'),
+      label: '设置',
+      click: () => targetWindow.webContents.send('open-settings'),
     },
     { type: 'separator' },
     {

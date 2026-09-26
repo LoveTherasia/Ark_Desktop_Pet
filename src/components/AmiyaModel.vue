@@ -2,17 +2,23 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import { Spine } from 'pixi-spine'
-import skeletonUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.skel?url'
-import atlasUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.atlas?url'
-import textureUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.png?url'
+import skeletonUrl from '../assets/艾雅法拉/三丽鸥家族_II/build_char_180_amgoat_sanrio_2.skel?url'
+import atlasUrl from '../assets/艾雅法拉/三丽鸥家族_II/build_char_180_amgoat_sanrio_2.atlas?url'
+import textureUrl from '../assets/艾雅法拉/三丽鸥家族_II/build_char_180_amgoat_sanrio_2.png?url'
 
 const canvasHost = ref<HTMLDivElement | null>(null)
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   interactionKey: number
   pointerInteractionEnabled?: boolean
   walking?: boolean
   facingLeft?: boolean
-}>()
+  /** 画布尺寸，设置页的预览会传入更小的值；默认与桌宠一致。 */
+  canvasWidth?: number
+  canvasHeight?: number
+}>(), {
+  canvasWidth: 280,
+  canvasHeight: 240,
+})
 const loading = ref(true)
 const errorMessage = ref('')
 
@@ -208,8 +214,8 @@ onMounted(() => {
   window.addEventListener('mousemove', syncMouseEvents)
 
   app = new PIXI.Application({
-    width: 280,
-    height: 240,
+    width: props.canvasWidth,
+    height: props.canvasHeight,
     antialias: true,
     transparent: true,
     resolution: window.devicePixelRatio || 1,
@@ -260,7 +266,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="canvasHost" class="amiya-model" aria-label="阿米娅模型">
+  <div ref="canvasHost" class="amiya-model" :style="{ height: `${props.canvasHeight}px` }" aria-label="桌宠模型">
     <span v-if="loading" class="model-message">模型加载中...</span>
     <span v-else-if="errorMessage" class="model-message model-error">{{ errorMessage }}</span>
   </div>
@@ -270,7 +276,6 @@ onBeforeUnmount(() => {
 .amiya-model {
   position: relative;
   width: 100%;
-  height: 240px;
 }
 
 .amiya-model :deep(canvas) {
