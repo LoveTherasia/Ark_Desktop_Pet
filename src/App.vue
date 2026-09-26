@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AmiyaModel from './components/AmiyaModel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import PetBubble, { type BubbleMessage } from './components/PetBubble.vue'
 
 const interactionCount = ref(0)
 const mood = ref('待机中')
@@ -9,10 +10,46 @@ const mood = ref('待机中')
 // ---- 设置页：只负责开关，页面内部逻辑见 SettingsPanel.vue ----
 const settingsOpen = ref(false)
 
-/** 自主走动：空闲一段时间后随机走一小段；距离与朝向由主进程按屏幕工作区计算。 */
-const walkFirstDelayMs = 5000
-const walkIntervalMinMs = 9000
-const walkIntervalMaxMs = 22000
+// ---- 聊天气泡：消息由主进程推送，这里只负责展示与窗口加宽 ----
+const bubbleVisibleMs = 8000
+const bubble = ref<BubbleMessage | null>(null)
+const bubbleSide = ref<'right' | 'left'>('right')
+let bubbleTimer: number | null = null
+
+async function showBubble(message: BubbleMessage) {
+  // 设置页打开时桌面已被弹窗覆盖，气泡先不打扰
+  if (settingsOpen.value) return
+
+  bubble.value = message
+  const result = await window.ipcRenderer.invoke('bubble-resize', true) as { side: 'right' | 'left' }
+  bubbleSide.value = result?.side ?? 'right'
+
+  if (bubbleTimer !== null) window.clearTimeout(bubbleTimer)
+  bubbleTimer = window.setTimeout(() => { void hideBubble() }, bubbleVisibleMs)
+}
+
+async function hideBubble() {
+  if (bubbleTimer !== null) {
+    window.clearTimeout(bubbleTimer)
+    bubbleTimer = null
+  }
+  if (!bubble.value) return
+
+  bubble.value = null
+  await window.ipcRenderer.invoke('bubble-resize', false)
+}
+
+function handleBubbleShow(_event: unknown, message: BubbleMessage) {
+  void showBubble(message)
+}
+
+/**
+ * 自主走动：空闲一段时间后随机走一小段；距离与朝向由主进程按屏幕工作区计算。
+ * 频率刻意放得很低，避免频繁移动打扰日常使用。
+ */
+const walkFirstDelayMs = 20000
+const walkIntervalMinMs = 60000
+const walkIntervalMaxMs = 180000
 
 const walking = ref(false)
 const facingLeft = ref(false)
@@ -153,8 +190,11 @@ function openContextMenu() {
   window.ipcRenderer?.send('show-context-menu')
 }
 
-function openSettings() {
+async function openSettings() {
   stopWalking()
+  // 先等气泡收起（会把窗口还原成桌宠尺寸），再打开设置页，
+  // 否则两个改窗口尺寸的 IPC 可能交错，导致设置页停在错误尺寸上
+  await hideBubble()
   settingsOpen.value = true
 }
 
@@ -164,19 +204,22 @@ function closeSettings() {
 }
 
 function handleOpenSettings() {
-  openSettings()
+  void openSettings()
 }
 
 onMounted(() => {
   window.ipcRenderer?.on('open-settings', handleOpenSettings)
+  window.ipcRenderer?.on('bubble-show', handleBubbleShow)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
   scheduleWalk(walkFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
   window.ipcRenderer?.off('open-settings', handleOpenSettings)
+  window.ipcRenderer?.off('bubble-show', handleBubbleShow)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
   clearWalkTimers()
+  if (bubbleTimer !== null) window.clearTimeout(bubbleTimer)
   if (walking.value) window.ipcRenderer?.send('walk-stop')
 })
 
@@ -185,7 +228,11 @@ void openContextMenu
 </script>
 
 <template>
-  <main class="pet-shell" @contextmenu.prevent="openContextMenu">
+  <main
+    class="pet-shell"
+    :class="{ 'shell-bubble-left': bubbleSide === 'left' }"
+    @contextmenu.prevent="openContextMenu"
+  >
     <section class="pet-card" aria-label="明日方舟桌宠">
       <header class="pet-header">
         <span class="status-dot" aria-hidden="true"></span>
@@ -218,6 +265,10 @@ void openContextMenu
         <span class="interaction-count">互动 {{ interactionCount }}</span>
       </div>
     </section>
+
+    <Transition name="pet-bubble">
+      <PetBubble v-if="bubble" :message="bubble" />
+    </Transition>
 
     <SettingsPanel
       v-if="settingsOpen"

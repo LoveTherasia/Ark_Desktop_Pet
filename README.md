@@ -2,7 +2,7 @@
 
 明日方舟人物桌宠项目，基于 Electron、Vue 3、TypeScript 和 Vite。
 
-当前版本：`0.5.0`。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：`0.6.0`。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 开发
 
@@ -71,4 +71,13 @@ import textureUrl from '../assets/角色/皮肤/模型.png?url'
 ```
 
 三行路径必须来自同一个模型目录，并且文件名要完全对应。
+
+## 桌面活动气泡
+
+桌宠会感知当前正在使用的前台应用，并在应用切换时在人物旁边弹出一条聊天气泡，约 8 秒后自动收起。
+
+- 只读取前台**进程名**，不读取窗口标题；类别与进程名的对应关系见 [activity.ts](electron/activity.ts) 里的 `categoryDefinitions`。
+- 轮询间隔为 `activityPollIntervalMs`（默认 3 秒），因此切换应用后气泡最多晚 3 秒出现。
+- 显示气泡时窗口会临时横向加宽，**桌宠在屏幕上的位置不会移动**；右侧空间不足时气泡自动出现在人物左侧。
+- 气泡是通用消息面板：主进程任意位置调用 `pushBubble({ source, icon, title, detail })` 即可推送，活动检测只是当前唯一的生产者，便于后续扩展提醒、对话等功能。
 

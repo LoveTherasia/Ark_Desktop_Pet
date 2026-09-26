@@ -19,7 +19,112 @@ body {
 
 button { font: inherit; }
 
-.pet-shell { min-height: 100vh; padding: 18px; }
+.pet-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 100vh;
+  padding: 18px;
+}
+
+/* 显示气泡时窗口整体加宽，桌宠列固定 284px（320 - 两侧 18px 内边距）保持不动 */
+.pet-card {
+  flex: 0 0 284px;
+  width: 284px;
+}
+
+/* 右侧放不下气泡时主进程会把窗口向左加宽，这里同步把气泡换到桌宠左边 */
+.pet-shell.shell-bubble-left {
+  flex-direction: row-reverse;
+}
+
+/* ---- 聊天气泡 ---- */
+
+.pet-bubble {
+  position: relative;
+  flex: 0 0 238px;
+  width: 238px;
+  margin-top: 42px;
+  border: 1px solid rgba(47, 58, 74, 0.14);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #fffdf5;
+  box-shadow: 0 12px 30px rgba(30, 38, 48, 0.18);
+}
+
+/* 指向桌宠的小尖角：默认在气泡左侧，翻到左边时移到右侧 */
+.pet-bubble::before,
+.pet-bubble::after {
+  position: absolute;
+  top: 26px;
+  width: 0;
+  height: 0;
+  border: 9px solid transparent;
+  content: '';
+}
+
+.pet-bubble::before {
+  left: -19px;
+  border-right-color: rgba(47, 58, 74, 0.14);
+}
+
+.pet-bubble::after {
+  left: -17px;
+  border-right-color: #fffdf5;
+}
+
+.shell-bubble-left .pet-bubble::before {
+  right: -19px;
+  left: auto;
+  border-right-color: transparent;
+  border-left-color: rgba(47, 58, 74, 0.14);
+}
+
+.shell-bubble-left .pet-bubble::after {
+  right: -17px;
+  left: auto;
+  border-right-color: transparent;
+  border-left-color: #fffdf5;
+}
+
+.pet-bubble-icon {
+  float: left;
+  margin-right: 10px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.pet-bubble-body {
+  overflow: hidden;
+}
+
+.pet-bubble-title {
+  margin: 0;
+  color: #252b36;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pet-bubble-detail {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #7d8478;
+  font-family: 'Trebuchet MS', sans-serif;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-bubble-enter-active,
+.pet-bubble-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.pet-bubble-enter-from,
+.pet-bubble-leave-to {
+  opacity: 0;
+  transform: translateX(8px) scale(0.96);
+}
 
 .model-browser {
   position: fixed;

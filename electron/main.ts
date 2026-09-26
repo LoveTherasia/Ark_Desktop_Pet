@@ -1,7 +1,8 @@
-import { app, BrowserWindow, Menu, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, powerMonitor, screen } from 'electron'
 import { access, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { startActivityWatcher, type ActivityWatcher } from './activity'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -49,13 +50,75 @@ type LocalModel = {
   info: ModelInfo | null
 }
 
+// ---- 桌宠右侧的聊天气泡：显示时把窗口横向加宽，桌宠本身在屏幕上不动 ----
+let bubbleSide: 'right' | 'left' | null = null
+let activityWatcher: ActivityWatcher | null = null
+
+type BubblePayload = {
+  source: string
+  icon: string
+  title: string
+  detail?: string
+}
+
+/** 通用气泡推送入口：活动检测只是第一个生产者，后续功能可直接复用。 */
+function pushBubble(payload: BubblePayload) {
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('bubble-show', payload)
+}
+
+function setBubbleWidth(visible: boolean): { side: 'right' | 'left' } {
+  if (!win || win.isDestroyed()) return { side: bubbleSide ?? 'right' }
+
+  const bounds = win.getBounds()
+
+  if (!visible) {
+    if (bubbleSide) {
+      // 收回时把窗口还原到桌宠尺寸，桌宠在屏幕上的位置保持不变
+      const restoredX = bubbleSide === 'left' ? bounds.x + bubbleWindowExtraWidth : bounds.x
+      win.setBounds({ x: restoredX, y: bounds.y, width: petWindowWidth, height: bounds.height })
+      bubbleSide = null
+    }
+    return { side: 'right' }
+  }
+
+  if (bubbleSide) return { side: bubbleSide }
+
+  const { workArea } = screen.getDisplayMatching(bounds)
+  const rightRoom = workArea.x + workArea.width - (bounds.x + petWindowWidth)
+  const leftRoom = bounds.x - workArea.x
+
+  let side: 'right' | 'left' = 'right'
+  let x = bounds.x
+
+  if (rightRoom >= bubbleWindowExtraWidth) {
+    side = 'right'
+  } else if (leftRoom >= bubbleWindowExtraWidth) {
+    // 右侧放不下就翻到左边，桌宠本身仍在原位置
+    side = 'left'
+    x = bounds.x - bubbleWindowExtraWidth
+  } else {
+    // 两侧都放不下（工作区比桌宠+气泡还窄）：优先保证桌宠不动，只把桌宠本身夹在工作区内，
+    // 气泡允许溢出屏幕边缘
+    side = 'right'
+    x = Math.max(workArea.x, Math.min(bounds.x, workArea.x + workArea.width - petWindowWidth))
+  }
+
+  bubbleSide = side
+  win.setBounds({ x, y: bounds.y, width: petWindowWidth + bubbleWindowExtraWidth, height: bounds.height })
+  return { side }
+}
+
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
 const petWindowWidth = 320
 const petWindowHeight = 380
-const walkSpeedPxPerSecond = 60
+/** 显示气泡时窗口向右（或向左）加宽的像素数，需与 style.css 中的气泡列宽保持一致。 */
+const bubbleWindowExtraWidth = 250
+// 走得慢、走得近：只在小范围里挪动，不打扰桌面上的其他工作
+const walkSpeedPxPerSecond = 40
 const walkTickMs = 16
-const walkMinDistancePx = 80
-const walkMaxDistancePx = 320
+const walkMinDistancePx = 24
+const walkMaxDistancePx = 96
 
 type WalkSession = {
   timer: ReturnType<typeof setInterval>
@@ -294,6 +357,8 @@ ipcMain.on('show-context-menu', (event) => {
   contextMenu.popup({ window: targetWindow })
 })
 
+ipcMain.handle('bubble-resize', (_event, visible: boolean) => setBubbleWidth(Boolean(visible)))
+
 ipcMain.handle('walk-start', () => beginWalk())
 
 ipcMain.on('walk-stop', () => endWalk(false))
@@ -394,4 +459,25 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  createWindow()
+
+  activityWatcher = startActivityWatcher(
+    [path.basename(process.execPath, '.exe'), 'ark-desktop-pet'],
+    (snapshot) => {
+      // 前台应用变化时推一条气泡；后续功能可以复用同一个 pushBubble 入口
+      pushBubble({
+        source: 'activity',
+        icon: snapshot.icon,
+        title: snapshot.label,
+        detail: snapshot.processName,
+      })
+    },
+    () => powerMonitor.getSystemIdleTime(),
+  )
+})
+
+app.on('will-quit', () => {
+  activityWatcher?.stop()
+  activityWatcher = null
+})
