@@ -25,13 +25,6 @@ interface LocalModel {
   info: ModelInfo | null
 }
 
-defineProps<{
-  /** 窗口拖动沿用 App.vue 的实现，与桌宠拖动共用同一套 IPC 与指针捕获逻辑。 */
-  startDrag: (event: PointerEvent) => void
-  moveDrag: (event: PointerEvent) => void
-  endDrag: (event: PointerEvent) => void
-}>()
-
 const emit = defineEmits<{ close: [] }>()
 
 const settingsTab = ref<'character' | 'skin' | 'preference'>('character')
@@ -156,31 +149,43 @@ function confirmSkinChange() {
   if (target) void applyModel(target.name, '更换皮肤失败')
 }
 
+/** 当前分区待确认的目标，直接用于固定页脚的确认栏。 */
+const pendingSelection = computed(() => {
+  if (settingsTab.value === 'preference') return ''
+
+  if (settingsTab.value === 'character') {
+    return selectedCharacter.value ? `${selectedCharacter.value} / 默认服装` : ''
+  }
+  return selectedSkin.value ? `${currentModel.value?.character ?? ''} / ${selectedSkin.value}` : ''
+})
+
+function confirmChange() {
+  if (settingsTab.value === 'character') confirmCharacterChange()
+  else confirmSkinChange()
+}
+
+async function refresh() {
+  await Promise.all([refreshModels(), loadSettings()])
+}
+
+function handleSettingsRefresh() {
+  void refresh()
+}
+
 onMounted(() => {
-  // 打开设置页时窗口需要接收鼠标事件并放大；关闭时在 onBeforeUnmount 里还原
-  window.ipcRenderer?.send('set-ignore-mouse-events', false)
-  window.ipcRenderer?.send('resize-window', 620, 620)
-  void refreshModels()
-  void loadSettings()
+  window.ipcRenderer?.on('settings-refresh', handleSettingsRefresh)
+  void refresh()
 })
 
 onBeforeUnmount(() => {
-  window.ipcRenderer?.send('set-ignore-mouse-events', true)
-  window.ipcRenderer?.send('resize-window', 320, 380)
+  window.ipcRenderer?.off('settings-refresh', handleSettingsRefresh)
 })
 </script>
 
 <template>
   <div class="model-browser" role="dialog" aria-label="设置">
     <div class="model-browser-panel">
-      <header
-        class="model-browser-header"
-        title="按住拖动可移动窗口"
-        @pointerdown="startDrag"
-        @pointermove="moveDrag"
-        @pointerup="endDrag"
-        @pointercancel="endDrag"
-      >
+      <header class="model-browser-header" title="按住拖动可移动窗口">
         <div>
           <p class="model-browser-kicker">SETTINGS</p>
           <h1>设置</h1>
@@ -189,7 +194,6 @@ onBeforeUnmount(() => {
           class="icon-button"
           type="button"
           aria-label="关闭设置"
-          @pointerdown.stop
           @click="emit('close')"
         >×</button>
       </header>
@@ -280,69 +284,65 @@ onBeforeUnmount(() => {
             aria-label="筛选角色"
           />
         </form>
-
-        <p v-if="!models.length" class="model-message-success">src/assets 中还没有可用的模型文件夹。</p>
-        <p v-else-if="!characterList.length" class="model-message-success">没有匹配的角色。</p>
-        <div v-else class="model-results">
-          <button
-            v-for="character in characterList"
-            :key="character.name"
-            class="model-option"
-            :class="{ selected: selectedCharacter === character.name }"
-            type="button"
-            @click="selectedCharacter = character.name"
-          >
-            <span class="model-option-name">
-              {{ character.name }}
-              <span v-if="character.name === currentModel?.character" class="settings-badge">当前</span>
-            </span>
-            <span class="model-option-meta">{{ character.skinCount }} 套皮肤</span>
-          </button>
-        </div>
-
-        <div v-if="selectedCharacter" class="model-selection">
-          <div>
-            <p class="model-selection-label">确认更换为</p>
-            <strong>{{ selectedCharacter }} / 默认服装</strong>
-          </div>
-          <button type="button" :disabled="switching" @click="confirmCharacterChange">
-            {{ switching ? '修改中' : '确认更换' }}
-          </button>
-        </div>
       </template>
 
-      <template v-else>
-        <p class="settings-hint">
-          当前角色：<strong>{{ currentModel?.character ?? '未知' }}</strong>，共 {{ skinList.length }} 套皮肤
-        </p>
+      <p v-else class="settings-hint">
+        当前角色：<strong>{{ currentModel?.character ?? '未知' }}</strong>，共 {{ skinList.length }} 套皮肤
+      </p>
 
-        <div class="model-results">
-          <button
-            v-for="model in skinList"
-            :key="model.name"
-            class="model-option"
-            :class="{ selected: selectedSkin === model.skin }"
-            type="button"
-            @click="selectedSkin = model.skin"
-          >
-            <span class="model-option-name">
-              {{ model.skin }}
-              <span v-if="model.skin === currentModel?.skin" class="settings-badge">当前</span>
-            </span>
-            <span class="model-option-meta">{{ model.info?.skinGroupId || '—' }}</span>
-          </button>
-        </div>
-
-        <div v-if="selectedSkin" class="model-selection">
-          <div>
-            <p class="model-selection-label">确认更换为</p>
-            <strong>{{ currentModel?.character }} / {{ selectedSkin }}</strong>
+      <!-- 唯一滚动区：列表再长也不会把底部的确认栏顶出窗口 -->
+      <div class="settings-body">
+        <template v-if="settingsTab === 'character'">
+          <p v-if="!models.length" class="model-message-success">src/assets 中还没有可用的模型文件夹。</p>
+          <p v-else-if="!characterList.length" class="model-message-success">没有匹配的角色。</p>
+          <div v-else class="model-results">
+            <button
+              v-for="character in characterList"
+              :key="character.name"
+              class="model-option"
+              :class="{ selected: selectedCharacter === character.name }"
+              type="button"
+              @click="selectedCharacter = character.name"
+            >
+              <span class="model-option-name">
+                {{ character.name }}
+                <span v-if="character.name === currentModel?.character" class="settings-badge">当前</span>
+              </span>
+              <span class="model-option-meta">{{ character.skinCount }} 套皮肤</span>
+            </button>
           </div>
-          <button type="button" :disabled="switching" @click="confirmSkinChange">
-            {{ switching ? '修改中' : '确认更换' }}
-          </button>
+        </template>
+
+        <template v-else>
+          <div class="model-results">
+            <button
+              v-for="model in skinList"
+              :key="model.name"
+              class="model-option"
+              :class="{ selected: selectedSkin === model.skin }"
+              type="button"
+              @click="selectedSkin = model.skin"
+            >
+              <span class="model-option-name">
+                {{ model.skin }}
+                <span v-if="model.skin === currentModel?.skin" class="settings-badge">当前</span>
+              </span>
+              <span class="model-option-meta">{{ model.info?.skinGroupId || '—' }}</span>
+            </button>
+          </div>
+        </template>
+      </div>
+
+      <!-- 固定页脚：确认栏始终可见，不随列表滚动 -->
+      <div v-if="pendingSelection" class="model-selection settings-footer">
+        <div>
+          <p class="model-selection-label">确认更换为</p>
+          <strong>{{ pendingSelection }}</strong>
         </div>
-      </template>
+        <button type="button" :disabled="switching" @click="confirmChange">
+          {{ switching ? '修改中' : '确认更换' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

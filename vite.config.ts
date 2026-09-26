@@ -22,4 +22,13 @@ export default defineConfig({
       // See 👉 https://github.com/electron-vite/vite-plugin-electron-renderer
     }),
   ],
+  build: {
+    rollupOptions: {
+      // 两个渲染入口：桌宠窗口（index）与独立的设置窗口（settings）
+      input: {
+        index: path.join(__dirname, 'index.html'),
+        settings: path.join(__dirname, 'settings.html'),
+      },
+    },
+  },
 })

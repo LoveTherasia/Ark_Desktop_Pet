@@ -90,7 +90,9 @@ async function saveSettings() {
 }
 
 function notifySettings() {
-  if (win && !win.isDestroyed()) win.webContents.send('settings-changed', appSettings)
+  for (const target of BrowserWindow.getAllWindows()) {
+    if (!target.isDestroyed()) target.webContents.send('settings-changed', appSettings)
+  }
 }
 
 /** 关闭该功能时直接结束检测用的 PowerShell 进程，而不是只隐藏气泡。 */
@@ -132,6 +134,101 @@ type BubblePayload = {
 function pushBubble(payload: BubblePayload) {
   if (!win || win.isDestroyed()) return
   win.webContents.send('bubble-show', payload)
+}
+
+/** 渲染层页面：设置页是独立窗口，走自己的 HTML 入口。 */
+function loadRendererPage(targetWindow: BrowserWindow, page: 'index.html' | 'settings.html') {
+  if (VITE_DEV_SERVER_URL) {
+    // dev server 地址末尾自带斜杠，去掉后拼接页面路径
+    targetWindow.loadURL(`${VITE_DEV_SERVER_URL.replace(/\/$/, '')}/${page}`)
+  } else {
+    targetWindow.loadFile(path.join(RENDERER_DIST, page))
+  }
+}
+
+// ---- 设置窗口：与桌宠窗口相互独立，拖动它不会带动桌宠 ----
+let settingsWindow: BrowserWindow | null = null
+
+function openSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show()
+    settingsWindow.focus()
+    // 让已打开的设置窗口重新读取当前模型与偏好
+    settingsWindow.webContents.send('settings-refresh')
+    return
+  }
+
+  const settingsWidth = 620
+  // 高度给足，让“确认更换”按钮与列表同屏可见，不需要滚动；屏幕不够高时按工作区收窄
+  const maxSettingsHeight = 780
+  const gap = 16
+
+  const petBounds = win && !win.isDestroyed() ? win.getBounds() : null
+  const display = petBounds ? screen.getDisplayMatching(petBounds) : screen.getPrimaryDisplay()
+  const area = display.workArea
+  const settingsHeight = Math.max(480, Math.min(maxSettingsHeight, area.height - 40))
+
+  // 默认贴着桌宠右侧打开，右侧放不下就放左侧，再不行才居中：
+  // 避免设置窗口正好压在桌宠上（两者都被系统居中创建时几乎完全重叠）
+  let x = petBounds
+    ? petBounds.x + petBounds.width + gap
+    : area.x + Math.round((area.width - settingsWidth) / 2)
+  if (petBounds && x + settingsWidth > area.x + area.width) {
+    x = petBounds.x - settingsWidth - gap
+  }
+  x = Math.max(area.x, Math.min(x, area.x + area.width - settingsWidth))
+
+  // 竖直方向在工作区内居中
+  let y = area.y + Math.round((area.height - settingsHeight) / 2)
+  y = Math.max(area.y, Math.min(y, area.y + area.height - settingsHeight))
+
+  settingsWindow = new BrowserWindow({
+    width: settingsWidth,
+    height: settingsHeight,
+    x,
+    y,
+    // 透明无边框窗口在 Windows 上有时仍会被系统当作可调整大小：
+    // 把 min/max 锁成同一尺寸，从根上杜绝拖动过程中右/下边框被拉动。
+    minWidth: settingsWidth,
+    maxWidth: settingsWidth,
+    minHeight: settingsHeight,
+    maxHeight: settingsHeight,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.mjs'),
+    },
+  })
+
+  settingsWindow.once('ready-to-show', () => settingsWindow?.show())
+  settingsWindow.on('closed', () => {
+    settingsWindow = null
+  })
+
+  settingsWindow.webContents.on('did-finish-load', () => {
+    console.log('[ArkPet] 设置窗口页面加载完成')
+  })
+  settingsWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[ArkPet] 设置窗口页面加载失败:', errorCode, errorDescription, validatedURL)
+  })
+  settingsWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[ArkPet] 设置窗口渲染进程退出:', details.reason)
+  })
+  settingsWindow.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    if (!message.includes('[ArkPet]')) return
+    console.log(`[ArkPet 设置窗口] ${message} (${sourceId}:${line})`)
+  })
+
+  // 设置窗口的渲染页面本身就是面板（铺满整窗），不需要鼠标穿透逻辑；
+  // 这样桌宠窗口仍是最轻量、也最容易出问题的那一个，避免两个窗口同时使用
+  // ignoreMouseEvents 的 forward 转发而互相干扰。
+  loadRendererPage(settingsWindow, 'settings.html')
 }
 
 function setBubbleWidth(visible: boolean): { side: 'right' | 'left' } {
@@ -396,11 +493,17 @@ ipcMain.handle('activate-local-model', async (event, modelName: string) => {
 
   const targetWindow = BrowserWindow.fromWebContents(event.sender)
   if (targetWindow) {
-    // 重新加载前先把窗口恢复到桌宠态：渲染进程重启后内部状态是“小窗 + 穿透”，
-    // 若保留弹窗期的 620×620 与关闭穿透，人物会被横向拉伸且透明区域会挡住桌面点击。
-    targetWindow.setIgnoreMouseEvents(true, { forward: true })
-    targetWindow.setSize(petWindowWidth, petWindowHeight)
-    targetWindow.webContents.reload()
+    // 模型切换后整页重载才能用上新的资源导入：
+    // 桌宠窗口必须重载；设置窗口也重载，让预览与信息卡片同步到新模型。
+    setBubbleWidth(false)
+    if (win && !win.isDestroyed()) {
+      // 重载后渲染层的“可交互”初值与主进程保持一致（默认不穿透）
+      win.setIgnoreMouseEvents(false)
+      win.webContents.reload()
+    }
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.webContents.reload()
+    }
   }
   return normalizedModel
 })
@@ -412,7 +515,7 @@ ipcMain.on('show-context-menu', (event) => {
   const contextMenu = Menu.buildFromTemplate([
     {
       label: '设置',
-      click: () => targetWindow.webContents.send('open-settings'),
+      click: () => openSettingsWindow(),
     },
     { type: 'separator' },
     {
@@ -446,10 +549,24 @@ ipcMain.on('window-drag-move', (event, pointerX: number, pointerY: number) => {
   const origin = windowDragOrigins.get(event.sender.id)
   if (!targetWindow || !origin) return
 
-  targetWindow.setPosition(
-    Math.round(origin.windowX + pointerX - origin.pointerX),
-    Math.round(origin.windowY + pointerY - origin.pointerY),
-  )
+  const nextX = Math.round(origin.windowX + pointerX - origin.pointerX)
+  const nextY = Math.round(origin.windowY + pointerY - origin.pointerY)
+  const [currentX, currentY] = targetWindow.getPosition()
+
+  // 位置没变化就不要调用 setPosition：在缩放显示器上反复移动透明窗口会让尺寸
+  // 产生 1px 级抖动，静止按住时会表现为窗口不断变大。
+  if (nextX === currentX && nextY === currentY) return
+
+  targetWindow.setPosition(nextX, nextY)
+
+  // 兜底：部分缩放比例下 setPosition 会顺带把窗口尺寸带偏，这里立刻还原。
+  // 显示气泡时窗口本来就是加宽状态，跳过检查避免把气泡挤掉。
+  if (bubbleSide === null) {
+    const [width, height] = targetWindow.getSize()
+    if (width !== petWindowWidth || height !== petWindowHeight) {
+      targetWindow.setSize(petWindowWidth, petWindowHeight)
+    }
+  }
 })
 
 ipcMain.on('window-drag-end', (event) => {
@@ -461,30 +578,17 @@ ipcMain.on('set-ignore-mouse-events', (event, ignore: boolean) => {
   targetWindow?.setIgnoreMouseEvents(ignore, { forward: true })
 })
 
-ipcMain.on('resize-window', (event, width: number, height: number) => {
-  const targetWindow = BrowserWindow.fromWebContents(event.sender)
-  if (!targetWindow) return
-
-  endWalk(true)
-  targetWindow.setSize(Math.round(width), Math.round(height))
-
-  // 放大到弹窗尺寸后可能越出屏幕，夹回当前显示器的工作区
-  const bounds = targetWindow.getBounds()
-  const { workArea } = screen.getDisplayMatching(bounds)
-  const maxX = Math.max(workArea.x, workArea.x + workArea.width - bounds.width)
-  const maxY = Math.max(workArea.y, workArea.y + workArea.height - bounds.height)
-  const clampedX = Math.min(Math.max(bounds.x, workArea.x), maxX)
-  const clampedY = Math.min(Math.max(bounds.y, workArea.y), maxY)
-
-  if (clampedX !== bounds.x || clampedY !== bounds.y) {
-    targetWindow.setPosition(clampedX, clampedY)
-  }
-})
+// 设置页已改为独立窗口，桌宠窗口不再需要为弹窗改变尺寸
 
 function createWindow() {
   win = new BrowserWindow({
     width: petWindowWidth,
     height: petWindowHeight,
+    // 高度锁死、宽度只留出气泡加宽的空间：避免在缩放显示器上被系统悄悄改变尺寸
+    minWidth: petWindowWidth,
+    maxWidth: petWindowWidth + bubbleWindowExtraWidth,
+    minHeight: petWindowHeight,
+    maxHeight: petWindowHeight,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -498,14 +602,27 @@ function createWindow() {
   })
 
   win.once('ready-to-show', () => win?.show())
-  win.setIgnoreMouseEvents(true, { forward: true })
+  // 桌宠是本应用的主窗口：它关闭时整个应用退出（设置窗口可能还开着）
+  win.on('closed', () => {
+    win = null
+    app.quit()
+  })
 
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL)
-  } else {
-    // win.loadFile('dist/index.html')
-    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
-  }
+  // 桌宠窗口必须始终可用：默认保持“可交互”，只有当渲染层确认指针不在人物身上时
+  // 才切成穿透。反过来（默认穿透）一旦页面/模型/命中检测任一环出问题，窗口就会永久
+  // 失去鼠标事件，表现为既拖不动也右键不了。
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('[ArkPet] 桌宠页面加载失败:', errorCode, errorDescription, validatedURL)
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[ArkPet] 桌宠渲染进程退出:', details.reason)
+  })
+  win.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    if (!message.includes('[ArkPet]')) return
+    console.log(`[ArkPet 渲染层] ${message} (${sourceId}:${line})`)
+  })
+
+  loadRendererPage(win, 'index.html')
 }
 
 // Quit when all windows are closed, except on macOS. There, it's common

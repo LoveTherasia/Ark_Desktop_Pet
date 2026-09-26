@@ -127,25 +127,28 @@ button { font: inherit; }
   transform: translateX(8px) scale(0.96);
 }
 
+/* 设置页现在独占一个窗口，面板直接铺满整窗，窗口内不再有透明边距（那部分会挡鼠标） */
 .model-browser {
   position: fixed;
   inset: 0;
   z-index: 10;
-  padding: 24px;
+  padding: 0;
   background: transparent;
   -webkit-app-region: no-drag;
 }
 
 .model-browser-panel {
-  width: min(100%, 572px);
-  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
   margin: 0 auto;
-  overflow: auto;
+  /* 面板本身不滚动：只有中间的列表区滚动，确认栏固定在底部始终可见 */
+  overflow: hidden;
   padding: 24px;
   border: 1px solid rgba(47, 58, 74, 0.18);
   border-radius: 14px;
   background: #fffdf5;
-  box-shadow: 0 20px 60px rgba(30, 38, 48, 0.26);
   -webkit-app-region: no-drag;
 }
 
@@ -154,7 +157,8 @@ button { font: inherit; }
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 20px;
-  /* 标题栏作为窗口拖拽手柄：拖动移动整个桌宠窗口 */
+  /* 交给系统的原生窗口拖动：不使用手动 setPosition，缩放显示器上也不会引起尺寸抖动 */
+  -webkit-app-region: drag;
   cursor: move;
   touch-action: none;
   user-select: none;
@@ -189,6 +193,8 @@ button { font: inherit; }
   cursor: pointer;
   font-size: 22px;
   line-height: 1;
+  /* 标题栏整体是拖动区域，按钮必须排除，否则点不动 */
+  -webkit-app-region: no-drag;
 }
 
 .model-search {
@@ -566,9 +572,20 @@ button { font: inherit; }
   font-weight: 700;
 }
 
-/* 设置页顶部有预览占位，列表高度收紧一些 */
+/* 唯一滚动区：列表再长也只在这里滚动，底部确认栏不会被顶出窗口 */
+.settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.settings-footer {
+  flex: 0 0 auto;
+}
+
+/* 设置窗口已经加高，列表不再需要单独限高（由 .settings-body 统一滚动） */
 .model-browser-panel .model-results {
-  max-height: 190px;
+  max-height: none;
 }
 
 /* ---- 偏好设置 ---- */

@@ -25,7 +25,8 @@ const errorMessage = ref('')
 let app: PIXI.Application | null = null
 let model: Spine | null = null
 let tickerUpdate: (() => void) | null = null
-let mouseEventsIgnored = true
+/** 与主进程的窗口状态保持一致：默认“可交互”，只有确认指针离开人物才切穿透 */
+let mouseEventsIgnored = false
 let pendingRefit = false
 let baseScale = 1
 let fitBounds: PIXI.Rectangle | null = null
@@ -124,7 +125,6 @@ function applyModelTransform() {
 
 function fitModel() {
   if (!app || !model) return
-
   // 先把当前动画姿态、骨骼矩阵和显示对象变换刷新一遍再测量边界。
   // 否则量到的是骨架尚未更新时的残留边界，不同模型偏差方向不同，
   // 会算出完全错误的缩放比例（例如斯卡蒂被缩到只剩几十像素）。
@@ -151,8 +151,20 @@ function fitModel() {
   applyModelTransform()
 }
 
-function syncMouseEvents(event: MouseEvent) {
-  if (props.pointerInteractionEnabled === false || !app || !model || event.buttons !== 0) return
+/** 模型每次加载完成后打印一次边界，便于排查命中检测/显示异常。 */
+function logModelReady() {
+  if (!model || !app) return
+
+  const bounds = model.getBounds()
+  console.log(
+    `[ArkPet] 模型就绪 bounds=${bounds.x.toFixed(0)},${bounds.y.toFixed(0)},${bounds.width.toFixed(0)}x${bounds.height.toFixed(0)}`,
+    `canvas=${app.screen.width}x${app.screen.height}`,
+    `dpr=${window.devicePixelRatio}`,
+    `ipcRenderer=${window.ipcRenderer ? '可用' : '不可用!'}`,
+  )
+}
+
+function syncMouseEvents(event: MouseEvent) {  if (props.pointerInteractionEnabled === false || !app || event.buttons !== 0) return
 
   const canvasBounds = app.view.getBoundingClientRect()
   const scaleX = app.screen.width / canvasBounds.width
@@ -161,7 +173,25 @@ function syncMouseEvents(event: MouseEvent) {
     (event.clientX - canvasBounds.left) * scaleX,
     (event.clientY - canvasBounds.top) * scaleY,
   )
-  const overModel = model.getBounds().contains(point.x, point.y)
+
+  // 判定“指针是否落在人物身上”。这里必须保证：只要指针确实在人物可见范围内，
+  // 窗口就一定可交互，否则用户会既拖不动也右键不了。
+  // 1) 模型已加载且边界有效时，用模型包围盒（放宽 8px，避免边缘抖动）；
+  // 2) 否则退化为整块画布——画布范围基本就是人物所在区域，宁可多挡一点也不能失去操作入口。
+  const modelBounds = model && model.visible ? model.getBounds() : null
+  const modelBoundsReady = !!modelBounds && modelBounds.width > 1 && modelBounds.height > 1
+  const hitPadding = 8
+
+  const overModel = modelBoundsReady
+    ? (
+      point.x >= modelBounds!.x - hitPadding
+      && point.x <= modelBounds!.x + modelBounds!.width + hitPadding
+      && point.y >= modelBounds!.y - hitPadding
+      && point.y <= modelBounds!.y + modelBounds!.height + hitPadding
+    )
+    : (point.x >= -hitPadding && point.x <= app.screen.width + hitPadding
+      && point.y >= -hitPadding && point.y <= app.screen.height + hitPadding)
+
   const shouldIgnore = !overModel
 
   if (shouldIgnore !== mouseEventsIgnored) {
@@ -230,6 +260,7 @@ onMounted(() => {
     if (pendingRefit) {
       pendingRefit = false
       fitModel()
+      logModelReady()
     }
   }
   app.ticker.add(tickerUpdate)
@@ -261,7 +292,7 @@ onBeforeUnmount(() => {
   tickerUpdate = null
   pendingRefit = false
   window.removeEventListener('mousemove', syncMouseEvents)
-  mouseEventsIgnored = true
+  mouseEventsIgnored = false
 })
 </script>
 

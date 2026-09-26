@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AmiyaModel from './components/AmiyaModel.vue'
-import SettingsPanel from './components/SettingsPanel.vue'
 import PetBubble, { type BubbleMessage } from './components/PetBubble.vue'
+import { useWindowDrag } from './composables/useWindowDrag'
 
 const interactionCount = ref(0)
 const mood = ref('待机中')
 
-// ---- 设置页：只负责开关，页面内部逻辑见 SettingsPanel.vue ----
-const settingsOpen = ref(false)
+// 桌宠窗口的拖动（设置窗口是独立的 BrowserWindow，用自己的那份拖动逻辑）
+const { startWindowDrag, moveWindow, endWindowDrag, consumeDragged } = useWindowDrag()
 
 // ---- 聊天气泡：消息由主进程推送，这里只负责展示与窗口加宽 ----
 const bubbleVisibleMs = 8000
@@ -19,8 +19,7 @@ const activityBubbleEnabled = ref(true)
 let bubbleTimer: number | null = null
 
 async function showBubble(message: BubbleMessage) {
-  // 设置页打开时桌面已被弹窗覆盖，气泡先不打扰；功能关闭时直接忽略
-  if (settingsOpen.value || !activityBubbleEnabled.value) return
+  if (!activityBubbleEnabled.value) return
 
   bubble.value = message
   const result = await window.ipcRenderer.invoke('bubble-resize', true) as { side: 'right' | 'left' }
@@ -73,11 +72,6 @@ const facingLeft = ref(false)
 let walkScheduleTimer: number | null = null
 let walkFallbackTimer: number | null = null
 
-let hasDragged = false
-let dragPointerId: number | null = null
-let dragStartX = 0
-let dragStartY = 0
-
 function clearWalkTimers() {
   if (walkScheduleTimer !== null) {
     window.clearTimeout(walkScheduleTimer)
@@ -124,7 +118,7 @@ function stopWalking() {
 async function tryWalk() {
   walkScheduleTimer = null
 
-  if (walking.value || settingsOpen.value) {
+  if (walking.value) {
     scheduleWalk()
     return
   }
@@ -151,10 +145,8 @@ function handleWalkEnd() {
 }
 
 function interact() {
-  if (hasDragged) {
-    hasDragged = false
-    return
-  }
+  // 拖动过就不算点击（避免拖窗口时误触互动）
+  if (consumeDragged()) return
 
   // 被摸到时先停下脚步，避免 Move 与交互动画抢占同一条轨道
   stopWalking()
@@ -162,70 +154,12 @@ function interact() {
   mood.value = interactionCount.value % 2 === 0 ? '心情不错' : '被摸到了'
 }
 
-function startWindowDrag(event: PointerEvent) {
-  if (event.button !== 0) return
-
-  dragPointerId = event.pointerId
-  dragStartX = event.screenX
-  dragStartY = event.screenY
-  hasDragged = false
-  window.ipcRenderer?.send('window-drag-start', event.screenX, event.screenY)
-
-  const target = event.currentTarget
-  if (target instanceof HTMLElement) {
-    target.setPointerCapture(event.pointerId)
-  }
-}
-
-function moveWindow(event: PointerEvent) {
-  if (event.pointerId !== dragPointerId) return
-
-  const movedX = event.screenX - dragStartX
-  const movedY = event.screenY - dragStartY
-  if (Math.abs(movedX) > 3 || Math.abs(movedY) > 3) {
-    hasDragged = true
-  }
-
-  if (hasDragged) {
-    window.ipcRenderer?.send('window-drag-move', event.screenX, event.screenY)
-  }
-}
-
-function endWindowDrag(event: PointerEvent) {
-  if (event.pointerId !== dragPointerId) return
-
-  window.ipcRenderer?.send('window-drag-end')
-  dragPointerId = null
-  const target = event.currentTarget
-  if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
-    target.releasePointerCapture(event.pointerId)
-  }
-}
-
 function openContextMenu() {
   stopWalking()
   window.ipcRenderer?.send('show-context-menu')
 }
 
-async function openSettings() {
-  stopWalking()
-  // 先等气泡收起（会把窗口还原成桌宠尺寸），再打开设置页，
-  // 否则两个改窗口尺寸的 IPC 可能交错，导致设置页停在错误尺寸上
-  await hideBubble()
-  settingsOpen.value = true
-}
-
-function closeSettings() {
-  settingsOpen.value = false
-  scheduleWalk()
-}
-
-function handleOpenSettings() {
-  void openSettings()
-}
-
 onMounted(() => {
-  window.ipcRenderer?.on('open-settings', handleOpenSettings)
   window.ipcRenderer?.on('bubble-show', handleBubbleShow)
   window.ipcRenderer?.on('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
@@ -234,7 +168,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.ipcRenderer?.off('open-settings', handleOpenSettings)
   window.ipcRenderer?.off('bubble-show', handleBubbleShow)
   window.ipcRenderer?.off('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
@@ -271,7 +204,6 @@ void openContextMenu
       >
         <AmiyaModel
           :interaction-key="interactionCount"
-          :pointer-interaction-enabled="!settingsOpen"
           :walking="walking"
           :facing-left="facingLeft"
         />
@@ -289,14 +221,5 @@ void openContextMenu
     <Transition name="pet-bubble">
       <PetBubble v-if="bubble" :message="bubble" />
     </Transition>
-
-    <SettingsPanel
-      v-if="settingsOpen"
-      :start-drag="startWindowDrag"
-      :move-drag="moveWindow"
-      :end-drag="endWindowDrag"
-      @close="closeSettings"
-    />
-
   </main>
 </template>
