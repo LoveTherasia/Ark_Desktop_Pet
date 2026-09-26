@@ -1,16 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AmiyaModel from './components/AmiyaModel.vue'
-
-interface ModelFile {
-  name: string
-  size: number
-}
-
-interface ModelOption {
-  name: string
-  files: ModelFile[]
-}
 
 interface LocalModel {
   name: string
@@ -21,18 +11,20 @@ interface LocalModel {
 
 const interactionCount = ref(0)
 const mood = ref('待机中')
-const modelBrowserOpen = ref(false)
-const modelQuery = ref('')
-const modelResults = ref<ModelOption[]>([])
-const selectedModel = ref<ModelOption | null>(null)
-const modelLoading = ref(false)
-const modelDownloading = ref(false)
 const modelMessage = ref('')
 const modelError = ref('')
 const characterBrowserOpen = ref(false)
 const localModels = ref<LocalModel[]>([])
+const characterQuery = ref('')
 const selectedCharacter = ref<LocalModel | null>(null)
 const characterLoading = ref(false)
+
+/** 本地模型按“角色/皮肤”筛选（纯本地过滤，不访问网络）。 */
+const filteredModels = computed(() => {
+  const query = characterQuery.value.trim().toLowerCase()
+  if (!query) return localModels.value
+  return localModels.value.filter((model) => model.name.toLowerCase().includes(query))
+})
 
 /** 自主走动：空闲一段时间后随机走一小段；距离与朝向由主进程按屏幕工作区计算。 */
 const walkFirstDelayMs = 5000
@@ -95,7 +87,7 @@ function stopWalking() {
 async function tryWalk() {
   walkScheduleTimer = null
 
-  if (walking.value || modelBrowserOpen.value || characterBrowserOpen.value) {
+  if (walking.value || characterBrowserOpen.value) {
     scheduleWalk()
     return
   }
@@ -186,23 +178,6 @@ function setMouseEventsIgnored(ignore: boolean) {
   window.ipcRenderer?.send('set-ignore-mouse-events', ignore)
 }
 
-function openModelBrowser() {
-  stopWalking()
-  modelBrowserOpen.value = true
-  modelMessage.value = ''
-  modelError.value = ''
-  setMouseEventsIgnored(false)
-  resizeWindow(620, 620)
-}
-
-function closeModelBrowser() {
-  modelBrowserOpen.value = false
-  selectedModel.value = null
-  setMouseEventsIgnored(true)
-  resizeWindow(320, 380)
-  scheduleWalk()
-}
-
 async function refreshLocalModels() {
   try {
     localModels.value = await window.ipcRenderer.invoke('list-local-models') as LocalModel[]
@@ -215,6 +190,7 @@ function openCharacterBrowser() {
   stopWalking()
   characterBrowserOpen.value = true
   selectedCharacter.value = null
+  characterQuery.value = ''
   modelError.value = ''
   modelMessage.value = ''
   setMouseEventsIgnored(false)
@@ -243,61 +219,17 @@ async function confirmCharacterChange() {
   }
 }
 
-async function searchModels() {
-  const query = modelQuery.value.trim()
-  if (!query) return
-
-  modelLoading.value = true
-  modelError.value = ''
-  modelMessage.value = ''
-  selectedModel.value = null
-  try {
-    modelResults.value = await window.ipcRenderer.invoke('search-models', query) as ModelOption[]
-    if (!modelResults.value.length) modelMessage.value = '没有找到匹配的模型文件夹'
-  } catch (error) {
-    modelError.value = error instanceof Error ? error.message : '查询模型失败'
-  } finally {
-    modelLoading.value = false
-  }
-}
-
-async function downloadSelectedModel() {
-  if (!selectedModel.value) return
-
-  modelDownloading.value = true
-  modelError.value = ''
-  modelMessage.value = ''
-  try {
-    const result = await window.ipcRenderer.invoke(
-      'download-model',
-      selectedModel.value.name,
-      modelQuery.value.trim(),
-    ) as { directoryName: string; fileCount: number }
-    modelMessage.value = `已保存到 src/assets/${result.directoryName}，共 ${result.fileCount} 个文件`
-  } catch (error) {
-    modelError.value = error instanceof Error ? error.message : '下载模型失败'
-  } finally {
-    modelDownloading.value = false
-  }
-}
-
-function handleOpenModelBrowser() {
-  openModelBrowser()
-}
-
 function handleOpenCharacterBrowser() {
   openCharacterBrowser()
 }
 
 onMounted(() => {
-  window.ipcRenderer?.on('open-model-browser', handleOpenModelBrowser)
   window.ipcRenderer?.on('open-character-browser', handleOpenCharacterBrowser)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
   scheduleWalk(walkFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
-  window.ipcRenderer?.off('open-model-browser', handleOpenModelBrowser)
   window.ipcRenderer?.off('open-character-browser', handleOpenCharacterBrowser)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
   clearWalkTimers()
@@ -328,7 +260,7 @@ void openContextMenu
       >
         <AmiyaModel
           :interaction-key="interactionCount"
-          :pointer-interaction-enabled="!modelBrowserOpen && !characterBrowserOpen"
+          :pointer-interaction-enabled="!characterBrowserOpen"
           :walking="walking"
           :facing-left="facingLeft"
         />
@@ -342,63 +274,6 @@ void openContextMenu
         <span class="interaction-count">互动 {{ interactionCount }}</span>
       </div>
     </section>
-
-    <div v-if="modelBrowserOpen" class="model-browser" role="dialog" aria-label="获取模型">
-      <div class="model-browser-panel">
-        <header
-          class="model-browser-header"
-          title="按住拖动可移动窗口"
-          @pointerdown="startWindowDrag"
-          @pointermove="moveWindow"
-          @pointerup="endWindowDrag"
-          @pointercancel="endWindowDrag"
-        >
-          <div>
-            <p class="model-browser-kicker">ARK MODELS</p>
-            <h1>获取桌宠模型</h1>
-          </div>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="关闭模型获取窗口"
-            @pointerdown.stop
-            @click="closeModelBrowser"
-          >×</button>
-        </header>
-
-        <form class="model-search" @submit.prevent="searchModels">
-          <input v-model="modelQuery" type="search" placeholder="输入文件夹名称，例如 amiya" aria-label="模型文件夹名称" />
-          <button type="submit" :disabled="modelLoading">{{ modelLoading ? '查询中' : '查询' }}</button>
-        </form>
-
-        <p v-if="modelError" class="model-message-error">{{ modelError }}</p>
-        <p v-else-if="modelMessage" class="model-message-success">{{ modelMessage }}</p>
-
-        <div v-if="modelResults.length" class="model-results">
-          <button
-            v-for="modelOption in modelResults"
-            :key="modelOption.name"
-            class="model-option"
-            :class="{ selected: selectedModel?.name === modelOption.name }"
-            type="button"
-            @click="selectedModel = modelOption"
-          >
-            <span class="model-option-name">{{ modelOption.name }}</span>
-            <span class="model-option-meta">{{ modelOption.files.length }} 个文件</span>
-          </button>
-        </div>
-
-        <div v-if="selectedModel" class="model-selection">
-          <div>
-            <p class="model-selection-label">已选择</p>
-            <strong>{{ selectedModel.name }}</strong>
-          </div>
-          <button type="button" :disabled="modelDownloading" @click="downloadSelectedModel">
-            {{ modelDownloading ? '下载中' : '下载到 assets' }}
-          </button>
-        </div>
-      </div>
-    </div>
 
     <div v-if="characterBrowserOpen" class="model-browser" role="dialog" aria-label="更换人物">
       <div class="model-browser-panel">
@@ -423,10 +298,23 @@ void openContextMenu
           >×</button>
         </header>
 
+        <form class="model-search" @submit.prevent>
+          <input
+            v-model="characterQuery"
+            type="search"
+            placeholder="按角色或皮肤筛选，例如 阿米娅"
+            aria-label="筛选本地模型"
+          />
+        </form>
+
+        <p v-if="modelError" class="model-message-error">{{ modelError }}</p>
+        <p v-else-if="modelMessage" class="model-message-success">{{ modelMessage }}</p>
+
         <p v-if="!localModels.length" class="model-message-success">src/assets 中还没有可用的模型文件夹。</p>
+        <p v-else-if="!filteredModels.length" class="model-message-success">没有匹配的本地模型。</p>
         <div v-else class="model-results">
           <button
-            v-for="model in localModels"
+            v-for="model in filteredModels"
             :key="model.name"
             class="model-option"
             :class="{ selected: selectedCharacter?.name === model.name }"

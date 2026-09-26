@@ -2,9 +2,9 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import { Spine } from 'pixi-spine'
-import skeletonUrl from '../assets/skadi/skadi_summer_3.skel?url'
-import atlasUrl from '../assets/skadi/skadi_summer_3.atlas?url'
-import textureUrl from '../assets/skadi/skadi_summer_3.png?url'
+import skeletonUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.skel?url'
+import atlasUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.atlas?url'
+import textureUrl from '../assets/阿米娅/默认服装/build_char_002_amiya.png?url'
 
 const canvasHost = ref<HTMLDivElement | null>(null)
 const props = defineProps<{
@@ -34,15 +34,24 @@ const modelFillRatio = 0.8
 /** 垂直微调像素，0 表示在舞台内居中。 */
 const modelOffsetY = 0
 /**
- * 个别角色骨骼单位与其他角色差异较大时，可按 assets 下的文件夹名单独调整倍率。
- * 键名即下面三行资源路径里的文件夹名，例如 { skadi: 1.15 }。
+ * 个别角色骨骼单位与其他角色差异较大时，可按 assets 下的「角色/皮肤」路径单独调整倍率。
+ * 键名即下面三行资源路径里的「角色/皮肤」，例如 { '斯卡蒂/珊瑚海岸_III': 1.15 }。
  */
 const modelScaleOverrides: Record<string, number> = {}
 
+function currentModelKey() {
+  const matched = skeletonUrl.match(/assets\/(.+)\/[^/]+$/)
+  if (!matched) return ''
+
+  try {
+    return decodeURIComponent(matched[1])
+  } catch {
+    return matched[1]
+  }
+}
+
 function currentModelScale() {
-  const matched = skeletonUrl.match(/assets\/([^/?#]+)\//)
-  const folder = matched ? matched[1] : ''
-  return modelScaleOverrides[folder] ?? 1
+  return modelScaleOverrides[currentModelKey()] ?? 1
 }
 
 function getAnimationName(preferredNames: string[]) {

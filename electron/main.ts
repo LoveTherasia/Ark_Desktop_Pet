@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, ipcMain, screen } from 'electron'
-import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { access, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -25,11 +25,7 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 let win: BrowserWindow | null
 const windowDragOrigins = new Map<number, { pointerX: number; pointerY: number; windowX: number; windowY: number }>()
-const modelRepository = 'isHarryh/Ark-Models'
-const modelBranch = 'main'
-type ModelTreeEntry = { path: string; type: string; url: string; size?: number }
 type LocalModel = { name: string; skeleton: string; atlas: string; texture: string }
-let modelTree: ModelTreeEntry[] = []
 
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
 const walkSpeedPxPerSecond = 60
@@ -107,98 +103,35 @@ function beginWalk(): { direction: 'left' | 'right'; durationMs: number } | null
 
 async function listLocalModels(): Promise<LocalModel[]> {
   const assetsDirectory = path.join(process.env.APP_ROOT, 'src', 'assets')
-  const entries = await readdir(assetsDirectory, { withFileTypes: true }).catch(() => [])
   const models: LocalModel[] = []
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const files = await readdir(path.join(assetsDirectory, entry.name))
-    const skeleton = files.find((file) => /\.(skel|json)$/i.test(file))
-    const atlas = files.find((file) => file.toLowerCase().endsWith('.atlas'))
-    const texture = files.find((file) => file.toLowerCase().endsWith('.png'))
-    if (skeleton && atlas && texture) {
-      models.push({ name: entry.name, skeleton, atlas, texture })
+  const characterEntries = await readdir(assetsDirectory, { withFileTypes: true }).catch(() => [])
+  for (const characterEntry of characterEntries) {
+    if (!characterEntry.isDirectory()) continue
+
+    const characterDirectory = path.join(assetsDirectory, characterEntry.name)
+    const skinEntries = await readdir(characterDirectory, { withFileTypes: true }).catch(() => [])
+    for (const skinEntry of skinEntries) {
+      if (!skinEntry.isDirectory()) continue
+
+      const files = await readdir(path.join(characterDirectory, skinEntry.name)).catch(() => [])
+      const skeleton = files.find((file) => /\.(skel|json)$/i.test(file))
+      const atlas = files.find((file) => file.toLowerCase().endsWith('.atlas'))
+      const texture = files.find((file) => file.toLowerCase().endsWith('.png'))
+      if (skeleton && atlas && texture) {
+        // name 就是相对 src/assets 的路径：<角色>/<皮肤>
+        models.push({
+          name: `${characterEntry.name}/${skinEntry.name}`,
+          skeleton,
+          atlas,
+          texture,
+        })
+      }
     }
   }
 
-  return models.sort((left, right) => left.name.localeCompare(right.name))
+  return models.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'))
 }
-
-async function fetchModelTree() {
-  const response = await fetch(`https://api.github.com/repos/${modelRepository}/git/trees/${modelBranch}?recursive=1`, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Ark-Desktop-Pet',
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`模型仓库查询失败（${response.status}）`)
-  }
-
-  const result = await response.json() as { tree?: ModelTreeEntry[]; truncated?: boolean }
-  if (result.truncated) {
-    throw new Error('模型仓库目录过大，GitHub 未返回完整目录')
-  }
-  modelTree = result.tree ?? []
-  return modelTree
-}
-
-function getModelFolders(query: string, tree: ModelTreeEntry[]) {
-  const prefix = 'models/'
-  const normalizedQuery = query.trim().toLowerCase()
-  const folders = new Map<string, ModelTreeEntry[]>()
-
-  for (const entry of tree) {
-    if (entry.type !== 'blob' || !entry.path.startsWith(prefix)) continue
-    const relativePath = entry.path.slice(prefix.length)
-    const separatorIndex = relativePath.indexOf('/')
-    if (separatorIndex < 1) continue
-
-    const folderName = relativePath.slice(0, separatorIndex)
-    if (!folderName.toLowerCase().includes(normalizedQuery)) continue
-    const files = folders.get(folderName) ?? []
-    files.push(entry)
-    folders.set(folderName, files)
-  }
-
-  return [...folders.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, files]) => ({
-      name,
-      files: files.map((file) => ({
-        name: file.path.slice(`${prefix}${name}/`.length),
-        size: file.size ?? 0,
-      })),
-    }))
-}
-
-function safeDirectoryName(value: string) {
-  const name = value.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-  return name || 'model'
-}
-
-async function uniqueAssetDirectory(baseName: string) {
-  const assetsDirectory = path.join(process.env.APP_ROOT, 'src', 'assets')
-  await mkdir(assetsDirectory, { recursive: true })
-
-  let directoryName = safeDirectoryName(baseName)
-  let suffix = 2
-  while (true) {
-    try {
-      await access(path.join(assetsDirectory, directoryName))
-      directoryName = `${safeDirectoryName(baseName)}#${suffix}`
-      suffix += 1
-    } catch {
-      return path.join(assetsDirectory, directoryName)
-    }
-  }
-}
-
-ipcMain.handle('search-models', async (_event, query: string) => {
-  if (!query?.trim()) return []
-  const tree = await fetchModelTree()
-  return getModelFolders(query, tree)
-})
 
 ipcMain.handle('list-local-models', () => listLocalModels())
 
@@ -246,45 +179,11 @@ ipcMain.handle('activate-local-model', async (event, modelName: string) => {
   return normalizedModel
 })
 
-ipcMain.handle('download-model', async (_event, sourceName: string, localBaseName: string) => {
-  const sourcePrefix = `models/${sourceName}/`
-  const files = modelTree.filter((entry) => entry.type === 'blob' && entry.path.startsWith(sourcePrefix))
-  if (!files.length) throw new Error('找不到选中的模型文件夹，请重新搜索')
-
-  const targetDirectory = await uniqueAssetDirectory(localBaseName || sourceName)
-  for (const file of files) {
-    const response = await fetch(file.url, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'Ark-Desktop-Pet',
-      },
-    })
-    if (!response.ok) throw new Error(`下载文件失败：${file.path}`)
-
-    const blob = await response.json() as { content?: string; encoding?: string }
-    if (!blob.content || blob.encoding !== 'base64') throw new Error(`文件内容格式错误：${file.path}`)
-
-    const relativePath = file.path.slice(sourcePrefix.length)
-    const targetPath = path.join(targetDirectory, relativePath)
-    await mkdir(path.dirname(targetPath), { recursive: true })
-    await writeFile(targetPath, Buffer.from(blob.content.replace(/\s/g, ''), 'base64'))
-  }
-
-  return {
-    directoryName: path.basename(targetDirectory),
-    fileCount: files.length,
-  }
-})
-
 ipcMain.on('show-context-menu', (event) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender)
   if (!targetWindow) return
 
   const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '获取模型',
-      click: () => targetWindow.webContents.send('open-model-browser'),
-    },
     {
       label: '更换人物',
       click: () => targetWindow.webContents.send('open-character-browser'),
