@@ -28,6 +28,8 @@ const windowDragOrigins = new Map<number, { pointerX: number; pointerY: number; 
 type LocalModel = { name: string; skeleton: string; atlas: string; texture: string }
 
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
+const petWindowWidth = 320
+const petWindowHeight = 380
 const walkSpeedPxPerSecond = 60
 const walkTickMs = 16
 const walkMinDistancePx = 80
@@ -175,7 +177,13 @@ ipcMain.handle('activate-local-model', async (event, modelName: string) => {
   await writeFile(componentPath, updatedSource, 'utf8')
 
   const targetWindow = BrowserWindow.fromWebContents(event.sender)
-  targetWindow?.webContents.reload()
+  if (targetWindow) {
+    // 重新加载前先把窗口恢复到桌宠态：渲染进程重启后内部状态是“小窗 + 穿透”，
+    // 若保留弹窗期的 620×620 与关闭穿透，人物会被横向拉伸且透明区域会挡住桌面点击。
+    targetWindow.setIgnoreMouseEvents(true, { forward: true })
+    targetWindow.setSize(petWindowWidth, petWindowHeight)
+    targetWindow.webContents.reload()
+  }
   return normalizedModel
 })
 
@@ -255,8 +263,8 @@ ipcMain.on('resize-window', (event, width: number, height: number) => {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 320,
-    height: 380,
+    width: petWindowWidth,
+    height: petWindowHeight,
     frame: false,
     transparent: true,
     alwaysOnTop: true,

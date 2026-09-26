@@ -2,7 +2,7 @@
 
 明日方舟人物桌宠项目，基于 Electron、Vue 3、TypeScript 和 Vite。
 
-当前版本：`0.4.0`。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：`0.4.1`。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 开发
 
