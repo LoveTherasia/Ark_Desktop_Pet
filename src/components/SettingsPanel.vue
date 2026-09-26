@@ -34,7 +34,7 @@ defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-const settingsTab = ref<'character' | 'skin'>('character')
+const settingsTab = ref<'character' | 'skin' | 'preference'>('character')
 const models = ref<LocalModel[]>([])
 const currentModel = ref<LocalModel | null>(null)
 const modelsLoading = ref(false)
@@ -43,6 +43,35 @@ const characterQuery = ref('')
 const selectedCharacter = ref('')
 const selectedSkin = ref('')
 const switching = ref(false)
+
+// ---- 偏好设置 ----
+const activityBubbleEnabled = ref(true)
+const preferenceSaving = ref(false)
+
+async function loadSettings() {
+  try {
+    const settings = await window.ipcRenderer.invoke('settings-get') as { activityBubbleEnabled?: boolean }
+    activityBubbleEnabled.value = settings?.activityBubbleEnabled !== false
+  } catch {
+    activityBubbleEnabled.value = true
+  }
+}
+
+async function toggleActivityBubble() {
+  if (preferenceSaving.value) return
+
+  preferenceSaving.value = true
+  const next = !activityBubbleEnabled.value
+  activityBubbleEnabled.value = next
+  try {
+    await window.ipcRenderer.invoke('settings-set', { activityBubbleEnabled: next })
+  } catch (error) {
+    activityBubbleEnabled.value = !next
+    errorMessage.value = error instanceof Error ? error.message : '保存设置失败'
+  } finally {
+    preferenceSaving.value = false
+  }
+}
 
 const currentInfo = computed(() => currentModel.value?.info ?? null)
 
@@ -132,6 +161,7 @@ onMounted(() => {
   window.ipcRenderer?.send('set-ignore-mouse-events', false)
   window.ipcRenderer?.send('resize-window', 620, 620)
   void refreshModels()
+  void loadSettings()
 })
 
 onBeforeUnmount(() => {
@@ -206,11 +236,42 @@ onBeforeUnmount(() => {
           :class="{ active: settingsTab === 'skin' }"
           @click="settingsTab = 'skin'"
         >更换皮肤</button>
+        <button
+          type="button"
+          :class="{ active: settingsTab === 'preference' }"
+          @click="settingsTab = 'preference'"
+        >偏好</button>
       </nav>
 
       <p v-if="errorMessage" class="model-message-error">{{ errorMessage }}</p>
 
-      <template v-if="settingsTab === 'character'">
+      <template v-if="settingsTab === 'preference'">
+        <div class="settings-preference">
+          <div class="settings-preference-text">
+            <p class="settings-preference-title">桌面活动气泡</p>
+            <p class="settings-preference-desc">
+              切换应用时在人物旁提示当前应用类别。关闭后不再检测前台应用，也不会再弹出气泡。
+            </p>
+          </div>
+          <button
+            class="settings-switch"
+            :class="{ on: activityBubbleEnabled }"
+            type="button"
+            role="switch"
+            :aria-checked="activityBubbleEnabled"
+            :aria-label="activityBubbleEnabled ? '关闭桌面活动气泡' : '开启桌面活动气泡'"
+            :disabled="preferenceSaving"
+            @click="toggleActivityBubble"
+          >
+            <span class="settings-switch-thumb" aria-hidden="true"></span>
+          </button>
+        </div>
+        <p class="settings-preference-state">
+          当前状态：<strong>{{ activityBubbleEnabled ? '已开启' : '已关闭' }}</strong>
+        </p>
+      </template>
+
+      <template v-else-if="settingsTab === 'character'">
         <form class="model-search" @submit.prevent>
           <input
             v-model="characterQuery"

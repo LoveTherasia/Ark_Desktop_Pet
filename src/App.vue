@@ -14,11 +14,13 @@ const settingsOpen = ref(false)
 const bubbleVisibleMs = 8000
 const bubble = ref<BubbleMessage | null>(null)
 const bubbleSide = ref<'right' | 'left'>('right')
+/** 由主进程的设置决定；关闭后即使收到推送也不再显示 */
+const activityBubbleEnabled = ref(true)
 let bubbleTimer: number | null = null
 
 async function showBubble(message: BubbleMessage) {
-  // 设置页打开时桌面已被弹窗覆盖，气泡先不打扰
-  if (settingsOpen.value) return
+  // 设置页打开时桌面已被弹窗覆盖，气泡先不打扰；功能关闭时直接忽略
+  if (settingsOpen.value || !activityBubbleEnabled.value) return
 
   bubble.value = message
   const result = await window.ipcRenderer.invoke('bubble-resize', true) as { side: 'right' | 'left' }
@@ -41,6 +43,21 @@ async function hideBubble() {
 
 function handleBubbleShow(_event: unknown, message: BubbleMessage) {
   void showBubble(message)
+}
+
+function handleSettingsChanged(_event: unknown, settings: { activityBubbleEnabled?: boolean }) {
+  activityBubbleEnabled.value = settings?.activityBubbleEnabled !== false
+  // 刚被关闭时立刻收起已经显示的气泡
+  if (!activityBubbleEnabled.value) void hideBubble()
+}
+
+async function loadSettings() {
+  try {
+    const settings = await window.ipcRenderer.invoke('settings-get') as { activityBubbleEnabled?: boolean }
+    activityBubbleEnabled.value = settings?.activityBubbleEnabled !== false
+  } catch {
+    activityBubbleEnabled.value = true
+  }
 }
 
 /**
@@ -210,13 +227,16 @@ function handleOpenSettings() {
 onMounted(() => {
   window.ipcRenderer?.on('open-settings', handleOpenSettings)
   window.ipcRenderer?.on('bubble-show', handleBubbleShow)
+  window.ipcRenderer?.on('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
+  void loadSettings()
   scheduleWalk(walkFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
   window.ipcRenderer?.off('open-settings', handleOpenSettings)
   window.ipcRenderer?.off('bubble-show', handleBubbleShow)
+  window.ipcRenderer?.off('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
   clearWalkTimers()
   if (bubbleTimer !== null) window.clearTimeout(bubbleTimer)

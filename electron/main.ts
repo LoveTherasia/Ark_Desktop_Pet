@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, ipcMain, powerMonitor, screen } from 'electron'
-import { access, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { startActivityWatcher, type ActivityWatcher } from './activity'
@@ -53,6 +53,73 @@ type LocalModel = {
 // ---- 桌宠右侧的聊天气泡：显示时把窗口横向加宽，桌宠本身在屏幕上不动 ----
 let bubbleSide: 'right' | 'left' | null = null
 let activityWatcher: ActivityWatcher | null = null
+
+// ---- 用户偏好：持久化到 userData/settings.json ----
+type AppSettings = {
+  /** 桌面活动气泡（含前台应用检测）开关 */
+  activityBubbleEnabled: boolean
+}
+
+const defaultSettings: AppSettings = { activityBubbleEnabled: true }
+let appSettings: AppSettings = { ...defaultSettings }
+
+function settingsFilePath() {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
+async function loadSettings() {
+  const raw = await readFile(settingsFilePath(), 'utf8').catch(() => '')
+  if (!raw) return
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<AppSettings>
+    appSettings = { ...defaultSettings, ...parsed }
+  } catch {
+    // 配置损坏时回退默认值，不影响启动
+    appSettings = { ...defaultSettings }
+  }
+}
+
+async function saveSettings() {
+  try {
+    await mkdir(path.dirname(settingsFilePath()), { recursive: true })
+    await writeFile(settingsFilePath(), JSON.stringify(appSettings, null, 2), 'utf8')
+  } catch {
+    // 写入失败只影响持久化，本次会话仍按内存中的设置运行
+  }
+}
+
+function notifySettings() {
+  if (win && !win.isDestroyed()) win.webContents.send('settings-changed', appSettings)
+}
+
+/** 关闭该功能时直接结束检测用的 PowerShell 进程，而不是只隐藏气泡。 */
+function applyActivitySetting() {
+  if (appSettings.activityBubbleEnabled) {
+    startActivityDetection()
+  } else {
+    activityWatcher?.stop()
+    activityWatcher = null
+  }
+}
+
+function startActivityDetection() {
+  if (activityWatcher) return
+
+  activityWatcher = startActivityWatcher(
+    [path.basename(process.execPath, '.exe'), 'ark-desktop-pet'],
+    (snapshot) => {
+      // 前台应用变化时推一条气泡；后续功能可以复用同一个 pushBubble 入口
+      pushBubble({
+        source: 'activity',
+        icon: snapshot.icon,
+        title: snapshot.label,
+        detail: snapshot.processName,
+      })
+    },
+    () => powerMonitor.getSystemIdleTime(),
+  )
+}
 
 type BubblePayload = {
   source: string
@@ -112,8 +179,8 @@ function setBubbleWidth(visible: boolean): { side: 'right' | 'left' } {
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----
 const petWindowWidth = 320
 const petWindowHeight = 380
-/** 显示气泡时窗口向右（或向左）加宽的像素数，需与 style.css 中的气泡列宽保持一致。 */
-const bubbleWindowExtraWidth = 250
+/** 显示气泡时窗口横向加宽的像素数（气泡列宽 + 间距），需与 style.css 中的气泡尺寸保持一致。 */
+const bubbleWindowExtraWidth = 172
 // 走得慢、走得近：只在小范围里挪动，不打扰桌面上的其他工作
 const walkSpeedPxPerSecond = 40
 const walkTickMs = 16
@@ -459,22 +526,21 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow()
 
-  activityWatcher = startActivityWatcher(
-    [path.basename(process.execPath, '.exe'), 'ark-desktop-pet'],
-    (snapshot) => {
-      // 前台应用变化时推一条气泡；后续功能可以复用同一个 pushBubble 入口
-      pushBubble({
-        source: 'activity',
-        icon: snapshot.icon,
-        title: snapshot.label,
-        detail: snapshot.processName,
-      })
-    },
-    () => powerMonitor.getSystemIdleTime(),
-  )
+  await loadSettings()
+  applyActivitySetting()
+})
+
+ipcMain.handle('settings-get', () => appSettings)
+
+ipcMain.handle('settings-set', async (_event, patch: Partial<AppSettings>) => {
+  appSettings = { ...appSettings, ...patch }
+  await saveSettings()
+  applyActivitySetting()
+  notifySettings()
+  return appSettings
 })
 
 app.on('will-quit', () => {

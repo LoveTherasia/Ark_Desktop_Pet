@@ -42,46 +42,47 @@ button { font: inherit; }
 
 .pet-bubble {
   position: relative;
-  flex: 0 0 238px;
-  width: 238px;
-  margin-top: 42px;
+  /* 尺寸与 main.ts 的 bubbleWindowExtraWidth 对应：160 + 12 间距 = 172 */
+  flex: 0 0 160px;
+  width: 160px;
+  margin-top: 34px;
   border: 1px solid rgba(47, 58, 74, 0.14);
-  border-radius: 14px;
-  padding: 14px 16px;
+  border-radius: 11px;
+  padding: 8px 10px;
   background: #fffdf5;
-  box-shadow: 0 12px 30px rgba(30, 38, 48, 0.18);
+  box-shadow: 0 8px 20px rgba(30, 38, 48, 0.16);
 }
 
 /* 指向桌宠的小尖角：默认在气泡左侧，翻到左边时移到右侧 */
 .pet-bubble::before,
 .pet-bubble::after {
   position: absolute;
-  top: 26px;
+  top: 18px;
   width: 0;
   height: 0;
-  border: 9px solid transparent;
+  border: 7px solid transparent;
   content: '';
 }
 
 .pet-bubble::before {
-  left: -19px;
+  left: -15px;
   border-right-color: rgba(47, 58, 74, 0.14);
 }
 
 .pet-bubble::after {
-  left: -17px;
+  left: -13px;
   border-right-color: #fffdf5;
 }
 
 .shell-bubble-left .pet-bubble::before {
-  right: -19px;
+  right: -15px;
   left: auto;
   border-right-color: transparent;
   border-left-color: rgba(47, 58, 74, 0.14);
 }
 
 .shell-bubble-left .pet-bubble::after {
-  right: -17px;
+  right: -13px;
   left: auto;
   border-right-color: transparent;
   border-left-color: #fffdf5;
@@ -89,9 +90,9 @@ button { font: inherit; }
 
 .pet-bubble-icon {
   float: left;
-  margin-right: 10px;
-  font-size: 20px;
-  line-height: 1.2;
+  margin-right: 7px;
+  font-size: 15px;
+  line-height: 1.25;
 }
 
 .pet-bubble-body {
@@ -101,16 +102,16 @@ button { font: inherit; }
 .pet-bubble-title {
   margin: 0;
   color: #252b36;
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .pet-bubble-detail {
   overflow: hidden;
-  margin: 3px 0 0;
+  margin: 2px 0 0;
   color: #7d8478;
   font-family: 'Trebuchet MS', sans-serif;
-  font-size: 11px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -568,4 +569,80 @@ button { font: inherit; }
 /* 设置页顶部有预览占位，列表高度收紧一些 */
 .model-browser-panel .model-results {
   max-height: 190px;
+}
+
+/* ---- 偏好设置 ---- */
+
+.settings-preference {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid #e0e5dc;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #f7f9f3;
+}
+
+.settings-preference-text {
+  min-width: 0;
+}
+
+.settings-preference-title {
+  margin: 0;
+  color: #252b36;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-preference-desc {
+  margin: 4px 0 0;
+  color: #7d8478;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-preference-state {
+  margin: 10px 0 0;
+  color: #7d8478;
+  font-size: 11px;
+}
+
+/* 开关：轨道 + 滑块 */
+.settings-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 24px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  background: #cbd3c6;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+
+.settings-switch.on {
+  background: #c47758;
+}
+
+.settings-switch:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.settings-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fffdf5;
+  box-shadow: 0 1px 3px rgba(30, 38, 48, 0.28);
+  transition: transform 0.18s ease;
+}
+
+.settings-switch.on .settings-switch-thumb {
+  transform: translateX(22px);
 }
