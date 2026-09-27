@@ -70,6 +70,7 @@ const walkIntervalMaxMs = 180000
 const walking = ref(false)
 const relaxing = ref(false)
 const idleSit = ref(false)
+const sleeping = ref(false)
 const facingLeft = ref(false)
 let walkScheduleTimer: number | null = null
 let walkFallbackTimer: number | null = null
@@ -166,6 +167,32 @@ function resetIdleAnimation() {
   scheduleIdleSit()
 }
 
+function setPetSleeping(isSleeping: boolean) {
+  if (sleeping.value === isSleeping) return
+  sleeping.value = isSleeping
+
+  if (isSleeping) {
+    if (walking.value) window.ipcRenderer?.send('walk-stop')
+    walking.value = false
+    relaxing.value = false
+    idleSit.value = false
+    clearWalkTimers()
+    return
+  }
+
+  scheduleWalk()
+  scheduleRelax()
+  scheduleIdleSit()
+}
+
+function handleSleepState(_event: unknown, isSleeping: boolean) {
+  setPetSleeping(isSleeping)
+}
+
+function wakePet() {
+  if (sleeping.value) setPetSleeping(false)
+}
+
 /** 走动自然结束（或兜底超时）：复位状态并安排下一次。 */
 function finishWalk() {
   if (walkFallbackTimer !== null) {
@@ -233,6 +260,8 @@ function handleWalkEnd() {
 }
 
 function interact() {
+  wakePet()
+
   // 拖动过就不算点击（避免拖窗口时误触互动）
   if (consumeDragged()) return
 
@@ -245,6 +274,7 @@ function interact() {
 }
 
 function openContextMenu() {
+  wakePet()
   stopWalking()
   stopRelaxing()
   window.ipcRenderer?.send('show-context-menu')
@@ -254,6 +284,7 @@ onMounted(() => {
   window.ipcRenderer?.on('bubble-show', handleBubbleShow)
   window.ipcRenderer?.on('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
+  window.ipcRenderer?.on('pet-sleep-state', handleSleepState)
   void loadSettings()
   scheduleWalk(walkFirstDelayMs)
   scheduleRelax(relaxFirstDelayMs)
@@ -264,6 +295,7 @@ onBeforeUnmount(() => {
   window.ipcRenderer?.off('bubble-show', handleBubbleShow)
   window.ipcRenderer?.off('settings-changed', handleSettingsChanged)
   window.ipcRenderer?.off('walk-end', handleWalkEnd)
+  window.ipcRenderer?.off('pet-sleep-state', handleSleepState)
   clearWalkTimers()
   if (bubbleTimer !== null) window.clearTimeout(bubbleTimer)
   if (walking.value) window.ipcRenderer?.send('walk-stop')
@@ -277,7 +309,6 @@ void openContextMenu
   <main
     class="pet-shell"
     :class="{ 'shell-bubble-left': bubbleSide === 'left' }"
-    @contextmenu.prevent="openContextMenu"
   >
     <section class="pet-card" aria-label="明日方舟桌宠">
       <header class="pet-header">
@@ -290,6 +321,7 @@ void openContextMenu
         type="button"
         aria-label="和阿米娅互动"
         @click="interact"
+        @contextmenu.prevent="openContextMenu"
         @pointerdown="startWindowDrag"
         @pointermove="moveWindow"
         @pointerup="endWindowDrag"
@@ -300,6 +332,7 @@ void openContextMenu
           :walking="walking"
           :relaxing="relaxing"
           :idle-sit="idleSit"
+          :sleeping="sleeping"
           :facing-left="facingLeft"
         />
       </button>

@@ -54,6 +54,25 @@ type LocalModel = {
 let bubbleSide: 'right' | 'left' | null = null
 let bubblePointerSyncTimer: ReturnType<typeof setInterval> | null = null
 let activityWatcher: ActivityWatcher | null = null
+let idleSleepTimer: ReturnType<typeof setInterval> | null = null
+let petSleepState = false
+const idleSleepThresholdSeconds = 5 * 60
+const idleSleepPollIntervalMs = 5000
+
+function syncPetSleepState(force = false) {
+  const sleeping = powerMonitor.getSystemIdleTime() >= idleSleepThresholdSeconds
+  if (!force && sleeping === petSleepState) return
+
+  petSleepState = sleeping
+  if (win && !win.isDestroyed()) win.webContents.send('pet-sleep-state', sleeping)
+}
+
+function startIdleSleepMonitor() {
+  if (idleSleepTimer !== null) return
+
+  syncPetSleepState(true)
+  idleSleepTimer = setInterval(() => syncPetSleepState(), idleSleepPollIntervalMs)
+}
 
 // ---- 用户偏好：持久化到 userData/settings.json ----
 type AppSettings = {
@@ -288,6 +307,15 @@ function notifyPointerPosition() {
     clientY: cursor.y - bounds.y,
   })
 }
+
+ipcMain.on('sync-pointer-position', (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!targetWindow || targetWindow !== win) return
+
+  // 渲染层热更新后本地穿透状态会重置，先同步原生窗口状态再重新命中当前光标。
+  targetWindow.setIgnoreMouseEvents(false)
+  notifyPointerPosition()
+})
 
 function startBubblePointerSync() {
   stopBubblePointerSync()
@@ -638,6 +666,8 @@ function createWindow() {
     app.quit()
   })
 
+  win.webContents.on('did-finish-load', () => syncPetSleepState(true))
+
   // 桌宠窗口必须始终可用：默认保持“可交互”，只有当渲染层确认指针不在人物身上时
   // 才切成穿透。反过来（默认穿透）一旦页面/模型/命中检测任一环出问题，窗口就会永久
   // 失去鼠标事件，表现为既拖不动也右键不了。
@@ -675,6 +705,7 @@ app.on('activate', () => {
 
 app.whenReady().then(async () => {
   createWindow()
+  startIdleSleepMonitor()
 
   await loadSettings()
   applyActivitySetting()
@@ -691,6 +722,8 @@ ipcMain.handle('settings-set', async (_event, patch: Partial<AppSettings>) => {
 })
 
 app.on('will-quit', () => {
+  if (idleSleepTimer !== null) clearInterval(idleSleepTimer)
+  idleSleepTimer = null
   activityWatcher?.stop()
   activityWatcher = null
 })

@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   walking?: boolean
   relaxing?: boolean
   idleSit?: boolean
+  sleeping?: boolean
   facingLeft?: boolean
   /** 画布尺寸，设置页的预览会传入更小的值；默认与桌宠一致。 */
   canvasWidth?: number
@@ -104,8 +105,18 @@ function playRelaxAnimation() {
   setAnimation('Relax', true)
 }
 
+function playSleepAnimation() {
+  if (!hasAnimation('Sleep')) {
+    playIdleAnimation()
+    return
+  }
+
+  setAnimation('Sleep', true)
+}
+
 function applyAnimationState() {
   if (props.walking) playWalkAnimation()
+  else if (props.sleeping) playSleepAnimation()
   else if (props.relaxing) playRelaxAnimation()
   else playIdleAnimation()
 }
@@ -189,10 +200,7 @@ function syncMouseEventsAt(clientX: number, clientY: number) {
     (clientY - canvasBounds.top) * scaleY,
   )
 
-  // 判定“指针是否落在人物身上”。这里必须保证：只要指针确实在人物可见范围内，
-  // 窗口就一定可交互，否则用户会既拖不动也右键不了。
-  // 1) 模型已加载且边界有效时，用模型包围盒（放宽 8px，避免边缘抖动）；
-  // 2) 否则退化为整块画布——画布范围基本就是人物所在区域，宁可多挡一点也不能失去操作入口。
+  // 用模型包围盒判断穿透，并保留少量容差，避免角色边缘被误判为透明区域。
   const modelBounds = model && model.visible ? model.getBounds() : null
   const modelBoundsReady = !!modelBounds && modelBounds.width > 1 && modelBounds.height > 1
   const hitPadding = 8
@@ -204,8 +212,8 @@ function syncMouseEventsAt(clientX: number, clientY: number) {
       && point.y >= modelBounds!.y - hitPadding
       && point.y <= modelBounds!.y + modelBounds!.height + hitPadding
     )
-    : (point.x >= -hitPadding && point.x <= app.screen.width + hitPadding
-      && point.y >= -hitPadding && point.y <= app.screen.height + hitPadding)
+    : (point.x >= 0 && point.x <= app.screen.width
+      && point.y >= 0 && point.y <= app.screen.height)
 
   const shouldIgnore = !overModel
 
@@ -294,6 +302,7 @@ onMounted(() => {
   }
   app.ticker.add(tickerUpdate)
   loadModel()
+  window.ipcRenderer?.send('sync-pointer-position')
 })
 
 watch(() => props.interactionKey, playInteraction)
@@ -320,6 +329,15 @@ watch(() => props.relaxing, (isRelaxing) => {
   }
 
   if (!props.walking && playingAnimation === 'Relax') playIdleAnimation()
+})
+
+watch(() => props.sleeping, (isSleeping) => {
+  if (isSleeping) {
+    playSleepAnimation()
+    return
+  }
+
+  if (playingAnimation === 'Sleep') playIdleAnimation()
 })
 
 watch(() => props.idleSit, (isIdleSit) => {
