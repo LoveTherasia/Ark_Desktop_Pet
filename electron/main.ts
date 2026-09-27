@@ -52,6 +52,7 @@ type LocalModel = {
 
 // ---- 桌宠右侧的聊天气泡：显示时把窗口横向加宽，桌宠本身在屏幕上不动 ----
 let bubbleSide: 'right' | 'left' | null = null
+let bubblePointerSyncTimer: ReturnType<typeof setInterval> | null = null
 let activityWatcher: ActivityWatcher | null = null
 
 // ---- 用户偏好：持久化到 userData/settings.json ----
@@ -242,6 +243,8 @@ function setBubbleWidth(visible: boolean): { side: 'right' | 'left' } {
       const restoredX = bubbleSide === 'left' ? bounds.x + bubbleWindowExtraWidth : bounds.x
       win.setBounds({ x: restoredX, y: bounds.y, width: petWindowWidth, height: bounds.height })
       bubbleSide = null
+      stopBubblePointerSync()
+      notifyPointerPosition()
     }
     return { side: 'right' }
   }
@@ -270,7 +273,34 @@ function setBubbleWidth(visible: boolean): { side: 'right' | 'left' } {
 
   bubbleSide = side
   win.setBounds({ x, y: bounds.y, width: petWindowWidth + bubbleWindowExtraWidth, height: bounds.height })
+  startBubblePointerSync()
   return { side }
+}
+
+/** 窗口尺寸或位置变化后，强制渲染层按最新窗口坐标重新判断鼠标穿透。 */
+function notifyPointerPosition() {
+  if (!win || win.isDestroyed()) return
+
+  const cursor = screen.getCursorScreenPoint()
+  const bounds = win.getBounds()
+  win.webContents.send('bubble-pointer-position', {
+    clientX: cursor.x - bounds.x,
+    clientY: cursor.y - bounds.y,
+  })
+}
+
+function startBubblePointerSync() {
+  stopBubblePointerSync()
+  notifyPointerPosition()
+  // 气泡展开后窗口新增区域可能没有新的 mousemove，持续校准可避免透明区域卡住底层点击。
+  bubblePointerSyncTimer = setInterval(notifyPointerPosition, 50)
+}
+
+function stopBubblePointerSync() {
+  if (bubblePointerSyncTimer !== null) {
+    clearInterval(bubblePointerSyncTimer)
+    bubblePointerSyncTimer = null
+  }
 }
 
 // ---- 自主走动：位移在主进程完成，边界一律以当前显示器的工作区为准 ----

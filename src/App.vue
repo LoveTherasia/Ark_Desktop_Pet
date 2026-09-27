@@ -69,11 +69,13 @@ const walkIntervalMaxMs = 180000
 
 const walking = ref(false)
 const relaxing = ref(false)
+const idleSit = ref(false)
 const facingLeft = ref(false)
 let walkScheduleTimer: number | null = null
 let walkFallbackTimer: number | null = null
 let relaxScheduleTimer: number | null = null
 let relaxDurationTimer: number | null = null
+let idleSitTimer: number | null = null
 
 function clearWalkTimers() {
   if (walkScheduleTimer !== null) {
@@ -91,6 +93,10 @@ function clearWalkTimers() {
   if (relaxDurationTimer !== null) {
     window.clearTimeout(relaxDurationTimer)
     relaxDurationTimer = null
+  }
+  if (idleSitTimer !== null) {
+    window.clearTimeout(idleSitTimer)
+    idleSitTimer = null
   }
 }
 
@@ -138,6 +144,26 @@ function stopRelaxing() {
   }
   if (relaxing.value) relaxing.value = false
   scheduleRelax()
+}
+
+const idleSitDelayMs = 120000
+const idleSitChance = 0.45
+
+function scheduleIdleSit() {
+  if (idleSitTimer !== null) window.clearTimeout(idleSitTimer)
+  idleSitTimer = window.setTimeout(() => {
+    idleSitTimer = null
+    if (Math.random() < idleSitChance) {
+      idleSit.value = true
+      return
+    }
+    scheduleIdleSit()
+  }, idleSitDelayMs)
+}
+
+function resetIdleAnimation() {
+  idleSit.value = false
+  scheduleIdleSit()
 }
 
 /** 走动自然结束（或兜底超时）：复位状态并安排下一次。 */
@@ -213,6 +239,7 @@ function interact() {
   // 被摸到时先停下脚步，避免 Move 与交互动画抢占同一条轨道
   stopWalking()
   stopRelaxing()
+  resetIdleAnimation()
   interactionCount.value += 1
   mood.value = interactionCount.value % 2 === 0 ? '心情不错' : '被摸到了'
 }
@@ -230,6 +257,7 @@ onMounted(() => {
   void loadSettings()
   scheduleWalk(walkFirstDelayMs)
   scheduleRelax(relaxFirstDelayMs)
+  scheduleIdleSit()
 })
 
 onBeforeUnmount(() => {
@@ -271,6 +299,7 @@ void openContextMenu
           :interaction-key="interactionCount"
           :walking="walking"
           :relaxing="relaxing"
+          :idle-sit="idleSit"
           :facing-left="facingLeft"
         />
       </button>

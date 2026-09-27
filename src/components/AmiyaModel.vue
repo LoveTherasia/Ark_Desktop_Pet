@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
   pointerInteractionEnabled?: boolean
   walking?: boolean
   relaxing?: boolean
+  idleSit?: boolean
   facingLeft?: boolean
   /** 画布尺寸，设置页的预览会传入更小的值；默认与桌宠一致。 */
   canvasWidth?: number
@@ -33,7 +34,7 @@ let baseScale = 1
 let fitBounds: PIXI.Rectangle | null = null
 let playingAnimation = ''
 
-const defaultAnimationNames = ['Sit', 'Relax', 'Move', 'Default', 'Sleep']
+const defaultAnimationNames = ['Relax', 'Sit', 'Move', 'Default', 'Sleep']
 /** 走动时循环播放的动画；Move 的默认朝向是向右，向左走时用水平翻转。 */
 const walkAnimationName = 'Move'
 
@@ -79,7 +80,9 @@ function setAnimation(name: string, loop: boolean) {
 }
 
 function playIdleAnimation() {
-  const animationName = getAnimationName(defaultAnimationNames)
+  const animationName = getAnimationName(
+    props.idleSit ? ['Sit', 'Relax', 'Move', 'Default', 'Sleep'] : defaultAnimationNames,
+  )
   if (animationName) setAnimation(animationName, true)
 }
 
@@ -175,14 +178,15 @@ function logModelReady() {
   )
 }
 
-function syncMouseEvents(event: MouseEvent) {  if (props.pointerInteractionEnabled === false || !app || event.buttons !== 0) return
+function syncMouseEventsAt(clientX: number, clientY: number) {
+  if (props.pointerInteractionEnabled === false || !app) return
 
   const canvasBounds = app.view.getBoundingClientRect()
   const scaleX = app.screen.width / canvasBounds.width
   const scaleY = app.screen.height / canvasBounds.height
   const point = new PIXI.Point(
-    (event.clientX - canvasBounds.left) * scaleX,
-    (event.clientY - canvasBounds.top) * scaleY,
+    (clientX - canvasBounds.left) * scaleX,
+    (clientY - canvasBounds.top) * scaleY,
   )
 
   // 判定“指针是否落在人物身上”。这里必须保证：只要指针确实在人物可见范围内，
@@ -209,6 +213,19 @@ function syncMouseEvents(event: MouseEvent) {  if (props.pointerInteractionEnabl
     mouseEventsIgnored = shouldIgnore
     window.ipcRenderer?.send('set-ignore-mouse-events', shouldIgnore)
   }
+}
+
+function syncMouseEvents(event: MouseEvent) {
+  if (event.buttons !== 0) return
+  syncMouseEventsAt(event.clientX, event.clientY)
+}
+
+function handleBubblePointerPosition(
+  _event: unknown,
+  position: { clientX?: number; clientY?: number },
+) {
+  if (typeof position?.clientX !== 'number' || typeof position?.clientY !== 'number') return
+  syncMouseEventsAt(position.clientX, position.clientY)
 }
 
 function loadModel() {
@@ -253,6 +270,7 @@ onMounted(() => {
   if (!canvasHost.value) return
 
   window.addEventListener('mousemove', syncMouseEvents)
+  window.ipcRenderer?.on('bubble-pointer-position', handleBubblePointerPosition)
 
   app = new PIXI.Application({
     width: props.canvasWidth,
@@ -304,6 +322,10 @@ watch(() => props.relaxing, (isRelaxing) => {
   if (!props.walking && playingAnimation === 'Relax') playIdleAnimation()
 })
 
+watch(() => props.idleSit, (isIdleSit) => {
+  if (!props.walking && !props.relaxing && isIdleSit !== undefined) playIdleAnimation()
+})
+
 watch(() => props.facingLeft, applyModelTransform)
 
 onBeforeUnmount(() => {
@@ -317,6 +339,7 @@ onBeforeUnmount(() => {
   tickerUpdate = null
   pendingRefit = false
   window.removeEventListener('mousemove', syncMouseEvents)
+  window.ipcRenderer?.off('bubble-pointer-position', handleBubblePointerPosition)
   mouseEventsIgnored = false
 })
 </script>
