@@ -68,9 +68,12 @@ const walkIntervalMinMs = 60000
 const walkIntervalMaxMs = 180000
 
 const walking = ref(false)
+const relaxing = ref(false)
 const facingLeft = ref(false)
 let walkScheduleTimer: number | null = null
 let walkFallbackTimer: number | null = null
+let relaxScheduleTimer: number | null = null
+let relaxDurationTimer: number | null = null
 
 function clearWalkTimers() {
   if (walkScheduleTimer !== null) {
@@ -81,6 +84,14 @@ function clearWalkTimers() {
     window.clearTimeout(walkFallbackTimer)
     walkFallbackTimer = null
   }
+  if (relaxScheduleTimer !== null) {
+    window.clearTimeout(relaxScheduleTimer)
+    relaxScheduleTimer = null
+  }
+  if (relaxDurationTimer !== null) {
+    window.clearTimeout(relaxDurationTimer)
+    relaxDurationTimer = null
+  }
 }
 
 function randomWalkDelay() {
@@ -90,6 +101,43 @@ function randomWalkDelay() {
 function scheduleWalk(delay = randomWalkDelay()) {
   if (walkScheduleTimer !== null) window.clearTimeout(walkScheduleTimer)
   walkScheduleTimer = window.setTimeout(() => { void tryWalk() }, delay)
+}
+
+const relaxFirstDelayMs = 35000
+const relaxIntervalMinMs = 45000
+const relaxIntervalMaxMs = 120000
+const relaxDurationMinMs = 8000
+const relaxDurationMaxMs = 16000
+
+function randomRelaxDelay() {
+  return relaxIntervalMinMs + Math.random() * (relaxIntervalMaxMs - relaxIntervalMinMs)
+}
+
+function randomRelaxDuration() {
+  return relaxDurationMinMs + Math.random() * (relaxDurationMaxMs - relaxDurationMinMs)
+}
+
+function scheduleRelax(delay = randomRelaxDelay()) {
+  if (relaxScheduleTimer !== null) window.clearTimeout(relaxScheduleTimer)
+  relaxScheduleTimer = window.setTimeout(() => { void tryRelax() }, delay)
+}
+
+function finishRelax() {
+  if (relaxDurationTimer !== null) {
+    window.clearTimeout(relaxDurationTimer)
+    relaxDurationTimer = null
+  }
+  relaxing.value = false
+  scheduleRelax()
+}
+
+function stopRelaxing() {
+  if (relaxDurationTimer !== null) {
+    window.clearTimeout(relaxDurationTimer)
+    relaxDurationTimer = null
+  }
+  if (relaxing.value) relaxing.value = false
+  scheduleRelax()
 }
 
 /** 走动自然结束（或兜底超时）：复位状态并安排下一次。 */
@@ -115,6 +163,18 @@ function stopWalking() {
   scheduleWalk()
 }
 
+function tryRelax() {
+  relaxScheduleTimer = null
+
+  if (walking.value || relaxing.value) {
+    scheduleRelax()
+    return
+  }
+
+  relaxing.value = true
+  relaxDurationTimer = window.setTimeout(finishRelax, randomRelaxDuration())
+}
+
 async function tryWalk() {
   walkScheduleTimer = null
 
@@ -122,6 +182,8 @@ async function tryWalk() {
     scheduleWalk()
     return
   }
+
+  stopRelaxing()
 
   try {
     const started = await window.ipcRenderer.invoke('walk-start') as
@@ -150,12 +212,14 @@ function interact() {
 
   // 被摸到时先停下脚步，避免 Move 与交互动画抢占同一条轨道
   stopWalking()
+  stopRelaxing()
   interactionCount.value += 1
   mood.value = interactionCount.value % 2 === 0 ? '心情不错' : '被摸到了'
 }
 
 function openContextMenu() {
   stopWalking()
+  stopRelaxing()
   window.ipcRenderer?.send('show-context-menu')
 }
 
@@ -165,6 +229,7 @@ onMounted(() => {
   window.ipcRenderer?.on('walk-end', handleWalkEnd)
   void loadSettings()
   scheduleWalk(walkFirstDelayMs)
+  scheduleRelax(relaxFirstDelayMs)
 })
 
 onBeforeUnmount(() => {
@@ -205,6 +270,7 @@ void openContextMenu
         <AmiyaModel
           :interaction-key="interactionCount"
           :walking="walking"
+          :relaxing="relaxing"
           :facing-left="facingLeft"
         />
       </button>

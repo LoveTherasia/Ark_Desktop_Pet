@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   interactionKey: number
   pointerInteractionEnabled?: boolean
   walking?: boolean
+  relaxing?: boolean
   facingLeft?: boolean
   /** 画布尺寸，设置页的预览会传入更小的值；默认与桌宠一致。 */
   canvasWidth?: number
@@ -91,8 +92,18 @@ function playWalkAnimation() {
   setAnimation(walkAnimationName, true)
 }
 
+function playRelaxAnimation() {
+  if (!hasAnimation('Relax')) {
+    playIdleAnimation()
+    return
+  }
+
+  setAnimation('Relax', true)
+}
+
 function applyAnimationState() {
   if (props.walking) playWalkAnimation()
+  else if (props.relaxing) playRelaxAnimation()
   else playIdleAnimation()
 }
 
@@ -275,8 +286,22 @@ watch(() => props.walking, (isWalking) => {
     return
   }
 
+  if (props.relaxing) {
+    playRelaxAnimation()
+    return
+  }
+
   // 走动结束时回到待机；若此刻正在播交互动作则不要抢占轨道
   if (playingAnimation === walkAnimationName) playIdleAnimation()
+})
+
+watch(() => props.relaxing, (isRelaxing) => {
+  if (isRelaxing && !props.walking) {
+    playRelaxAnimation()
+    return
+  }
+
+  if (!props.walking && playingAnimation === 'Relax') playIdleAnimation()
 })
 
 watch(() => props.facingLeft, applyModelTransform)

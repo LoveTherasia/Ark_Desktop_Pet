@@ -286,7 +286,7 @@ onBeforeUnmount(() => {
         </form>
       </template>
 
-      <p v-else class="settings-hint">
+      <p v-else-if="settingsTab === 'skin'" class="settings-hint">
         当前角色：<strong>{{ currentModel?.character ?? '未知' }}</strong>，共 {{ skinList.length }} 套皮肤
       </p>
 
@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
 
-        <template v-else>
+        <template v-else-if="settingsTab === 'skin'">
           <div class="model-results">
             <button
               v-for="model in skinList"
