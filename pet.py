@@ -62,11 +62,8 @@ ROOT = APP_ROOT
 # =============================================================================
 # 可调参数
 # =============================================================================
-# 桌宠窗口初始尺寸（逻辑像素）。窗口是无边框透明的，人物“占多大地方”由它决定：
-#   - 调大 → 透明区域也变大，会挡住更多桌面点击
-#   - 调小 → 更紧凑，人物也会跟着变小
-# 运行时可用设置窗口里的「人物大小」缩放人物，但不会改变窗口本身。
-# 命令行会覆盖这里的值：--size 360x450
+# 桌宠窗口默认按人物自动定尺寸（见下方 PET_CANVAS_MARGIN_PX 与 apply_canvas_size），
+# 这两个值只在用 --size 明确指定固定窗口时才会用到。
 DEFAULT_WINDOW_WIDTH = 320
 DEFAULT_WINDOW_HEIGHT = 400
 
@@ -78,6 +75,38 @@ MENU_LABEL_CLOSE = "关闭桌宠"
 # 窗口背景。桌宠必须全透明，否则人物周围会出现一块色块。
 PET_BACKGROUND = (0.0, 0.0, 0.0, 0.0)
 
+# ---- 自动画布 ----
+# 窗口比人物实际占的像素大出多少（宽高各自，四周均分 → 每边 PET_CANVAS_MARGIN_PX/2）。
+# 单位是**物理像素**（屏幕真实像素），因此在高 DPI 缩放的显示器上留白看起来一致。
+# 想让人物周围留白更多就调大，想更贴边就调小（例如 20）。
+# 运行时可用 --margin 覆盖，所以这里是可变的模块级变量而不是常量。
+PET_CANVAS_MARGIN_PX = 50
+# 安全系数：渲染时人物是按 model_bounds（待机动画并集）居中的，而画布尺寸按
+# **当前动画**的可见范围算，两者中心略有差异；另外某个姿态也可能比整段并集更靠外。
+# 留一点余量避免这几种情况贴边（实测个别动作会正好压到底边）。
+# 1.0 = 严格 MARGIN，1.15 = 实际留白比目标多 15%。
+PET_CANVAS_SAFETY = 1.15
+# 画布上限，避免把「人物大小」拉到很大或在大屏上得到夸张的窗口尺寸。
+PET_CANVAS_MAX_WIDTH = 1600
+PET_CANVAS_MAX_HEIGHT = 1600
+
+# 自动画布的比例系数 r。推导：
+#   自动画布模式下绘制比例由窗口尺寸决定（沿用 FIT_* 那套适配公式）：
+#       scale = min(W*0.86/bw, H*0.90/bh) * 0.80      (W/H 为逻辑像素)
+#   要让"人物 = 窗口内缩 MARGIN"成立，即
+#       W = drawn_w + MARGIN/dpr,  H = drawn_h + MARGIN/dpr
+#       且 drawn_w = bw*scale/dpr, drawn_h = bh*scale/dpr
+#   把 W、H 代回 min() 的两个分支，令两支恰好相等（这是唯一自洽解），得到
+#       scale = 0.80 / (1 - 0.86) * ... 整理后：
+#       drawn = 0.688/(1-0.688) * MARGIN ≈ 2.205 * MARGIN   （人物像素 ≈ 2.2 倍留白）
+#   所以人物会占据窗口的绝大部分，四周各留 MARGIN/2。留白想更宽松就调大 MARGIN。
+def _canvas_ratio() -> float:
+    """返回 r = FIT_WIDTH_RATIO * FIT_SCALE。"""
+    return FIT_WIDTH_RATIO * FIT_SCALE
+
+
+PET_CANVAS_RATIO = _canvas_ratio()
+
 
 class PetWindow(SpineGLView):
     """透明、置顶、无边框的桌宠窗口：渲染在 SpineGLView 里，这里只加交互。"""
@@ -88,8 +117,15 @@ class PetWindow(SpineGLView):
         texture_path: Path,
         fit_mode: str = "idle",
         display_scale: float = DEFAULT_DISPLAY_SCALE,
-        window_size: tuple[int, int] = (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+        window_size: tuple[int, int] | None = None,
     ) -> None:
+        """window_size 为 None（默认）时窗口按人物自动定尺寸；传入具体尺寸则用固定窗口。"""
+        # 必须在调用父类构造之前设好这两个属性：父类 __init__ 里就会调用 refit()，
+        # 而 refit() 依赖固定窗口模式并写入 fit_scale_override。若留到之后再设，
+        # 那一轮 refit 会读到 SpineGLView 的类属性（None），导致固定窗口下
+        # 比例算错、人物被画得很小。
+        self.fixed_window_size: tuple[int, int] | None = window_size
+        self.fit_scale_override: float | None = None
         super().__init__(
             bridge,
             texture_path,
@@ -106,10 +142,159 @@ class PetWindow(SpineGLView):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        # 窗口尺寸见文件顶部的“可调参数”：DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT。
-        self.resize(window_size[0], window_size[1])
         # 由 main() 注入；右键菜单用它打开设置窗口。
         self.settings: SettingsWindow | None = None
+        if window_size is not None:
+            # 固定窗口：沿用父类的"按窗口适配"，先按目标尺寸重算一次。
+            self.resize(window_size[0], window_size[1])
+            self.refit()
+            return
+        # 自动画布：窗口尺寸由当前动画的可见范围决定。
+        self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+        self.apply_canvas_size(reposition=False)
+
+    # ------------------------------------------------------------------ 自适应画布
+    def current_animation_bounds(self) -> tuple[float, float, float, float] | None:
+        """当前动画整段的可见范围（带缓存）；取不到时退回整体包围盒。"""
+        name = self.current_animation
+        if name:
+            bounds = self.animation_bounds(name)
+            if bounds:
+                return bounds
+        return self.model_bounds
+
+    def canvas_size_for_bounds(self) -> tuple[int, int] | None:
+        """按当前动画的可见范围算出让"窗口比人物大 PET_CANVAS_MARGIN_PX"的窗口尺寸。
+
+        单位说明：包围盒与窗口尺寸都是**逻辑像素**（Qt 尺寸），而
+        PET_CANVAS_MARGIN_PX 是**物理像素**，这里先折成逻辑像素再参与计算。
+        着色器收到逻辑尺寸、OpenGL 视口是物理尺寸，把留白定义在物理像素上，
+        "人物比窗口小 MARGIN"在任何 DPI 缩放下都成立。
+
+        关键点：绘制比例由窗口尺寸经适配公式决定，而窗口尺寸又取决于绘制比例，
+        是个不动点问题。适配公式里的 min() 让宽高两轴耦合：
+
+            scale = min(W*0.86/bw, H*0.90/bh) * 0.80
+
+        代入 W = bw*scale + m、H = bh*scale + m 后按 scale 迭代，收敛很快
+        （压缩系数就是 r = 0.688）。解出来的窗口能让束缚轴恰好留出 m，
+        另一轴留得更多，人物不会被裁。
+        """
+        current = self.current_animation_bounds()
+        if not current:
+            return None
+        _, _, bounds_width, bounds_height = current
+        if bounds_width <= 0 or bounds_height <= 0:
+            return None
+        dpr = self.devicePixelRatioF() or 1.0
+        r = PET_CANVAS_RATIO
+        # 留白固定为 PET_CANVAS_MARGIN_PX 物理像素（换算成逻辑像素）。
+        # 注意不要在这里乘 display_scale：下面解算出的 scale 已经是
+        # "含 display_scale 的有效比例"，而 fit_rect_from_bounds 还会再乘一次
+        # display_scale，所以这里必须让它等于 base_scale * display_scale 才行。
+        margin = PET_CANVAS_MARGIN_PX * PET_CANVAS_SAFETY * self.display_scale / dpr
+        if margin <= 0:
+            return None
+        # 不动点迭代求自洽的绘制比例：窗口 = 人物像素 + 留白。
+        scale = margin / min(bounds_width, bounds_height) / (1.0 - r)
+        for _ in range(24):
+            logical_width = bounds_width * scale + margin
+            logical_height = bounds_height * scale + margin
+            scale = min(
+                (logical_width * FIT_WIDTH_RATIO) / bounds_width,
+                (logical_height * FIT_HEIGHT_RATIO) / bounds_height,
+            ) * FIT_SCALE
+        # 窗口 = 人物像素 + 留白（逻辑像素），并留 1px 余量避免取整后贴边。
+        logical_width = bounds_width * scale + margin + 1
+        logical_height = bounds_height * scale + margin + 1
+        width = max(1, min(round(logical_width), round(PET_CANVAS_MAX_WIDTH / dpr)))
+        height = max(1, min(round(logical_height), round(PET_CANVAS_MAX_HEIGHT / dpr)))
+        return width, height
+
+    def current_fit_scale(self) -> float:
+        """当前窗口下"让窗口恰好比人物大 MARGIN"的绘制比例。
+
+        PET_CANVAS_MARGIN_PX 是物理像素，所以比例与窗口的物理尺寸挂钩；
+        窗口尺寸变了就要重算（见 apply_canvas_size）。
+        """
+        current = self.current_animation_bounds()
+        if not current:
+            return 0.0
+        bounds_width, bounds_height = current[2], current[3]
+        if bounds_width <= 0 or bounds_height <= 0:
+            return 0.0
+        dpr = self.devicePixelRatioF() or 1.0
+        r = PET_CANVAS_RATIO
+        if r <= 0:
+            return 0.0
+        margin = PET_CANVAS_MARGIN_PX * PET_CANVAS_SAFETY * self.display_scale / dpr
+        if margin <= 0:
+            return 0.0
+        scale = margin / min(bounds_width, bounds_height) / (1.0 - r)
+        for _ in range(24):
+            logical_width = bounds_width * scale + margin
+            logical_height = bounds_height * scale + margin
+            scale = min(
+                (logical_width * FIT_WIDTH_RATIO) / bounds_width,
+                (logical_height * FIT_HEIGHT_RATIO) / bounds_height,
+            ) * FIT_SCALE
+        return scale
+
+    def apply_canvas_size(self, reposition: bool = True) -> None:
+        """按模型、当前动画与「人物大小」重算窗口尺寸。
+
+        换模型（set_model）、切动画（set_animation）和拖动「人物大小」滑块
+        （set_display_scale）后都会调用，所以画布会随人物一起变化。
+        用 --size 指定了固定窗口时不生效。
+        """
+        if self.fixed_window_size is not None:
+            return
+        target = self.canvas_size_for_bounds()
+        if target is None or target == (self.width(), self.height()):
+            return
+        # 缩放时保持人物脚底不动：窗口高度变了就把窗口整体下移同样的量。
+        # 窗口还没显示过时不移动，避免在屏幕左上角乱跳。
+        if reposition and self.isVisible():
+            bottom = self.y() + self.height()
+            self.resize(target[0], target[1])
+            self.move(self.x(), bottom - target[1])
+        else:
+            self.resize(target[0], target[1])
+        # 尺寸变了要重算适配矩形；resizeEvent 通常已处理，这里兜底。
+        self.refit()
+
+    def refit(self) -> None:
+        """重算居中缩放矩形。
+
+        自动画布模式下比例由"当前窗口尺寸"反解（见 current_fit_scale），
+        这样无论窗口、动画还是「人物大小」怎么变，人物始终比窗口小 MARGIN。
+        因为走的是 scale_override 通道，窗口尺寸与比例不会互相追着放大。
+
+        注意：父类 __init__ 里就会调用本方法，那时 fixed_window_size 还没赋值，
+        所以用 getattr 兜底。
+        """
+        if getattr(self, "fixed_window_size", None) is None:
+            # fit_rect_from_bounds 会把这个值再乘一次 display_scale，
+            # 而 current_fit_scale() 返回的已经是最终有效比例，这里先除掉。
+            display = self.display_scale if self.display_scale > 0 else 1.0
+            self.fit_scale_override = self.current_fit_scale() / display
+        super().refit()
+
+    # ------------------------------------------------------------------ 画布联动
+    def set_display_scale(self, scale: float) -> None:
+        """「人物大小」变化时同步重算画布，让人物周围始终只留 MARGIN 的余量。"""
+        super().set_display_scale(scale)
+        self.apply_canvas_size()
+
+    def set_animation(self, name: str) -> None:
+        """切动画后按该动画的可见范围重算画布（各动画胖瘦差别很大）。"""
+        super().set_animation(name)
+        self.apply_canvas_size()
+
+    def set_model(self, bridge: SpineBridge, texture_path: Path) -> None:
+        """换模型后按新模型的包围盒重算画布。"""
+        super().set_model(bridge, texture_path)
+        self.apply_canvas_size()
 
     # ------------------------------------------------------------------ 右键菜单
     def build_context_menu(self) -> QMenu:
@@ -187,10 +372,16 @@ def main() -> int:
     parser.add_argument(
         "--size",
         type=parse_size_option,
-        default=(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
-        help="Window size in logical pixels, as WIDTHxHEIGHT "
-             f"(default {DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}). "
-             "Overrides DEFAULT_WINDOW_WIDTH / DEFAULT_WINDOW_HEIGHT.",
+        default=None,
+        help="Use a FIXED window size as WIDTHxHEIGHT instead of the automatic canvas. "
+             "By default the window auto-fits the character plus a small margin.",
+    )
+    parser.add_argument(
+        "--margin",
+        type=int,
+        default=None,
+        help="Override PET_CANVAS_MARGIN_PX: how many pixels wider/taller the window is "
+             f"than the character (default {PET_CANVAS_MARGIN_PX}).",
     )
     parser.add_argument(
         "--scale",
@@ -206,6 +397,15 @@ def main() -> int:
              "The right-click menu intentionally exposes no animation list, matching the Vue app.",
     )
     arguments = parser.parse_args()
+
+    # 允许从命令行覆盖画布留白（必须在建窗口前生效）。
+    if arguments.margin is not None:
+        if arguments.margin < 0:
+            print("--margin must be >= 0", file=sys.stderr)
+            return 2
+        # 用 globals() 赋值而不是 global 语句：本函数上方（--margin 的帮助文本里）
+        # 已经引用了这个模块级名字，global 声明会触发 SyntaxError。
+        globals()["PET_CANVAS_MARGIN_PX"] = arguments.margin
 
     if not LIBRARY.is_file():
         print("Spine bridge DLL is missing. Build it first with: python build_runtime.py", file=sys.stderr)

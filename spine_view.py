@@ -269,20 +269,26 @@ def fit_rect_from_bounds(
     width: int,
     height: int,
     display_scale: float = 1.0,
+    scale_override: float | None = None,
 ) -> tuple[float, float, float] | None:
     """把模型包围盒映射为画布内的居中缩放矩形，返回 (center_x, center_y, scale)。
 
     保持单一实现，避免初始化和重新适配两处各算一套而互相漂移。
     display_scale 是用户可调的显示比例（设置窗口里的「大小」），
     它只改变人物在窗口里的大小，不改变窗口本身。
+    scale_override 非空时直接使用该比例，跳过"按画布适配"的计算——
+    桌宠的自动画布模式用它来精确控制人物大小（见 pet.PetWindow）。
     """
     bounds_x, bounds_y, bounds_width, bounds_height = bounds
     if bounds_width <= 0 or bounds_height <= 0 or width <= 0 or height <= 0:
         return None
-    scale = min(
-        (width * FIT_WIDTH_RATIO) / bounds_width,
-        (height * FIT_HEIGHT_RATIO) / bounds_height,
-    ) * FIT_SCALE * display_scale
+    if scale_override is not None:
+        scale = scale_override * display_scale
+    else:
+        scale = min(
+            (width * FIT_WIDTH_RATIO) / bounds_width,
+            (height * FIT_HEIGHT_RATIO) / bounds_height,
+        ) * FIT_SCALE * display_scale
     if scale <= 0:
         return None
     return (
@@ -351,6 +357,10 @@ class SpineGLView(QOpenGLWidget):
         self.background = background
         self.facing_left = False
         self.idle_animations: list[str] = []
+        # 非空时直接使用该比例绘制，跳过"按画布适配"；桌宠的自动画布用它固定人物大小。
+        self.fit_scale_override: float | None = None
+        # 每个动画的可见范围并集缓存（键为动画名），切动画时避免重复采样。
+        self._animation_bounds_cache: dict[str, tuple[float, float, float, float] | None] = {}
 
         texture_image = QImage(str(self.texture_path)).convertToFormat(QImage.Format.Format_RGBA8888)
         if texture_image.isNull():
@@ -418,6 +428,19 @@ class SpineGLView(QOpenGLWidget):
             return None
         return animation_bounds_union(bridge, names)
 
+    def animation_bounds(self, name: str) -> tuple[float, float, float, float] | None:
+        """单个动画整段采样的可见范围并集，结果会缓存。
+
+        桌宠的自动画布按"当前动画"定尺寸，而各个动画的可见范围差别很大
+        （例如 Relax 286x472、Move 314x503、Sleep 466x233），
+        缓存后切动画只多花一次采样。
+        """
+        if name in self._animation_bounds_cache:
+            return self._animation_bounds_cache[name]
+        bounds = animation_bounds_union(self.bridge, [name])
+        self._animation_bounds_cache[name] = bounds
+        return bounds
+
     def refit(self) -> None:
         """按当前控件尺寸和显示比例重新计算居中缩放矩形。
 
@@ -428,7 +451,11 @@ class SpineGLView(QOpenGLWidget):
             self.fit_center_scale = None
             return
         self.fit_center_scale = fit_rect_from_bounds(
-            self.model_bounds, self.width(), self.height(), self.display_scale
+            self.model_bounds,
+            self.width(),
+            self.height(),
+            self.display_scale,
+            self.fit_scale_override,
         )
 
     def set_display_scale(self, scale: float) -> None:
@@ -468,6 +495,8 @@ class SpineGLView(QOpenGLWidget):
                 bridge.update(0)
             self.current_animation = idle
             self.idle_animations = [n for n in ("Relax", "Move", "Default") if n in bridge.animations]
+            # 换了模型，之前缓存的各动画可见范围全部失效。
+            self._animation_bounds_cache.clear()
             self.model_bounds = self.measure_fit_bounds(bridge) or bounds_from_triangles(bridge.triangles())
             if not self.model_bounds:
                 raise RuntimeError("Spine model has no supported region or mesh attachments")

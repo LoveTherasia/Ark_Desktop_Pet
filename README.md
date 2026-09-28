@@ -89,27 +89,58 @@ SETTINGS / 设置                                              ×
 
 ## 调整大小
 
-各模块顶部都有带注释的「可调参数」区块。
+### 画布会自动贴合人物
+
+桌宠窗口**默认按人物自动定尺寸**：窗口比人物实际占的像素大约 `PET_CANVAS_MARGIN_PX`
+（默认 50 物理像素，四周均分即每边约 25px）。人物变了，画布跟着变：
+
+| 触发 | 行为 |
+| --- | --- |
+| 启动 | 按当前动画的可见范围算窗口尺寸 |
+| 切换动画 | 按新动画的可见范围重算（各动画胖瘦差别很大：Relax 286×472、Sleep 466×233） |
+| 拖动「人物大小」滑块 / `--scale` | 人物与画布按同一比例一起变大，留白随之同比例增长 |
+| 在设置窗口换模型 | 按新模型的包围盒重算 |
+
+绘制比例由"当前窗口尺寸"反解得到（不动点迭代，见 `PetWindow.current_fit_scale`）：
+要满足"窗口 = 人物像素 + 留白"，比例必须与窗口尺寸自洽，所以不能单独写死。
+因为走的是 `fit_scale_override` 通道，窗口尺寸与绘制比例不会互相追着放大。
+
+默认该模型下窗口从原来的 320×400 缩到约 **119×165 逻辑像素**（149×206 物理），
+人物四周留白 26–36px，符合 50px 的目标。
+
+### 相关常量
 
 | 常量 | 位置 | 含义 |
 | --- | --- | --- |
-| `DEFAULT_WINDOW_WIDTH` / `DEFAULT_WINDOW_HEIGHT` | `pet.py` | 桌宠窗口尺寸（逻辑像素，默认 320×400） |
-| `DEFAULT_DISPLAY_SCALE` | `spine_view.py` | 人物占窗口的比例 |
+| `PET_CANVAS_MARGIN_PX` | `pet.py` | 窗口比人物大多少（**物理像素**，默认 50） |
+| `PET_CANVAS_SAFETY` | `pet.py` | 安全系数（默认 1.15），吸收"人物中心与包围盒中心不一致"的偏差 |
+| `PET_CANVAS_MAX_WIDTH` / `MAX_HEIGHT` | `pet.py` | 画布上限，避免大屏或高倍率下窗口过大 |
+| `DEFAULT_WINDOW_WIDTH` / `DEFAULT_WINDOW_HEIGHT` | `pet.py` | 仅固定窗口模式（`--size`）下的默认值 |
+| `DEFAULT_DISPLAY_SCALE` | `spine_view.py` | 人物大小基准（1.0） |
 | `DISPLAY_SCALE_MIN` / `MAX` / `STEP` | `spine_view.py` | 大小滑块的范围与步进 |
 | `SETTINGS_WINDOW_WIDTH` / `SETTINGS_WINDOW_HEIGHT` | `settings_window.py` | 设置窗口尺寸（默认 620×620） |
 
-改人物大小的三种方式：
+### 改人物大小的三种方式
 
-1. **设置窗口** → 偏好 → 人物大小（实时，推荐）
+1. **设置窗口** → 偏好 → 人物大小（实时，推荐；人物与画布同比放大）
 2. **命令行**：
    ```powershell
-   # 360x450 的窗口，人物比适配尺寸再放大 30%
-   .venv\Scripts\python pet.py --size 360x450 --scale 1.3
+   # 人物比默认大 30%，画布同比放大（留白也从 50 变成约 65）
+   .venv\Scripts\python pet.py --scale 1.3
+   # 想要固定的窗口尺寸而不是自动画布：
+   .venv\Scripts\python pet.py --size 360x450
    ```
 3. **改常量**：编辑上表中的值
 
-人物始终会自动适配并居中于给定窗口，窗口缩放时也会重新适配。注意取舍：**窗口调大意味着透明
-区域也变大**，会挡住更多桌面点击；想要"人物大但点击区域紧凑"，应该调 `--scale` 而不是窗口尺寸。
+注意取舍：**留白调大 = 透明区域变大**，会挡住更多桌面点击。想让人物大而不占地方，
+调 `--scale`（人物与画布一起变大）而不是单独加 `PET_CANVAS_MARGIN_PX`。
+
+### 已知限制
+
+`PET_CANVAS_SAFETY = 1.15` 是为了兜住"人物实际中心与包围盒中心不一致"的偏差。
+即便如此，`Sit` 与 `Sleep` 这两个动作的姿态比整段并集更靠外，底部仍可能压到窗口边缘
+（各约 1 行像素）。这是"按整段并集定尺寸"的固有取舍；要完全避免只能改用逐姿态定尺寸，
+代价是动画播放时窗口会不断变化。
 
 ### 命令行参数
 
@@ -117,8 +148,9 @@ SETTINGS / 设置                                              ×
 --skeleton PATH     指定模型（.skel，需同名 .atlas/.png）
 --fit idle|all      idle：只用待机动画定标（默认，人物更大）
                     all ：所有动画取并集（任何动作都不越界，但人物更小）
---size WxH          窗口尺寸（逻辑像素）
---scale N           人物显示比例
+--size WxH          使用固定窗口尺寸（逻辑像素），关闭自动画布
+--scale N           人物显示比例（画布同比放大）
+--margin N          覆盖 PET_CANVAS_MARGIN_PX（物理像素）
 --animation NAME    启动时播放的动画
 --version           显示版本号
 ```
