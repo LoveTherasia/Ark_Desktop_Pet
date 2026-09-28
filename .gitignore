@@ -1,4 +1,4 @@
-# Logs
+# ---- 日志 ----
 logs
 *.log
 npm-debug.log*
@@ -7,16 +7,30 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# ---- Python 桌面宠物（仓库根目录）----
+# 这些都由 build_runtime.py / 首次运行生成，不入库：
+.venv/
+vendor/
+.build/
+__pycache__/
+*.pyc
+*.pyo
+# 注：src/assets 里的模型资源是共享数据，故意保留在版本控制中。
+
+# ---- legacy：旧 Vue/Electron 实现（仅存档，不再维护）----
 node_modules
+legacy/node_modules
 dist
 dist-electron
 release
 dist-ssr
 *.local
 
-# Editor directories and files
+# ---- 编辑器 ----
 .vscode/*
 !.vscode/extensions.json
+legacy/.vscode/*
+!legacy/.vscode/extensions.json
 .idea
 .DS_Store
 *.suo

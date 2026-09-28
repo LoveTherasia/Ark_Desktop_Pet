@@ -1,12 +1,16 @@
 {
   "name": "ark-desktop-pet",
   "private": true,
-  "version": "0.6.5",
+  "version": "0.7.0",
   "type": "module",
+  "description": "ArkPet 桌宠 —— 0.7.0 起改用 Python + PySide6 + Spine C Runtime 实现",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc && vite build && electron-builder",
-    "preview": "vite preview"
+    "py:build": "python build_runtime.py",
+    "py:run": "python pet.py",
+    "py:test": "python test_prototype.py",
+    "legacy:dev": "vite --config legacy/vite.config.ts",
+    "legacy:build": "vue-tsc -p legacy/tsconfig.json && vite build --config legacy/vite.config.ts && electron-builder --config legacy/electron-builder.json5",
+    "legacy:preview": "vite preview --config legacy/vite.config.ts"
   },
   "dependencies": {
     "pixi-spine": "^3.1.2",
@@ -23,5 +27,5 @@
     "vite-plugin-electron-renderer": "^0.14.5",
     "vue-tsc": "^2.0.26"
   },
-  "main": "dist-electron/main.js"
+  "main": "legacy/dist-electron/main.js"
 }

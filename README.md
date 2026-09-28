@@ -1,89 +1,217 @@
-# Ark Desktop Pet
+# ArkPet 桌宠
 
-明日方舟人物桌宠项目，基于 Electron、Vue 3、TypeScript 和 Vite。
+明日方舟人物桌宠。**0.7.0 起改用 Python 实现**：Python + PySide6 + 官方 Spine 3.8 C Runtime。
 
-当前版本：`0.6.2`。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：`0.7.0`（`py` 分支）。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 开发
+> 旧的 Vue 3 + Electron + pixi-spine 实现已移入 [`legacy/`](legacy/) 目录存档，**不再维护**，
+> 仅保留用于回滚与对照。下文描述的都是当前的 Python 实现。
 
-```powershell
-npm install
-npm run dev
-```
+## 为什么换成 Python
 
-如果 Electron 下载较慢，可以在 Windows PowerShell 中使用镜像：
+原先用 Electron + pixi.js（WebGL）渲染，运行时体积大、启动慢，且桌宠这类"常驻小工具"用
+整个浏览器内核偏重。现在改为直接调用官方 Spine C Runtime，用 OpenGL 绘制：
 
-```powershell
-$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'
-npm install
-```
+- 不需要 Electron / Node 运行时
+- Spine 解析与应用动画在 C 层完成，Python 只负责窗口与上传顶点
+- 桌宠窗口与设置窗口共用同一套渲染代码（`spine_view.SpineGLView`）
 
-## 目录
+## 环境要求
 
-- `electron/`：Electron 主进程和 preload 通信
-- `src/`：桌宠界面、交互和样式
-- `src/assets/<角色>/<皮肤>/`：本地模型库（已被 Git 忽略）
-- `public/`：静态资源
-- `electron-builder.json5`：Windows 打包配置
+- Windows 10/11、Python 3.10 或更新（开发环境为 3.13.7）
+- **GCC 与 G++** 在 `PATH` 上（用于编译 Spine C Runtime 与桥接层，例如 MinGW-w64）
+- **Git** 在 `PATH` 上（首次构建会拉取 Spine Runtime 源码）
+- 模型资源放在 `src/assets/<角色>/<皮肤>/`，同名 `.skel` + `.atlas` + `.png` 三件套
 
-## 构建
+## 快速开始
 
 ```powershell
-npm run build
+# 1) 建立虚拟环境并装依赖
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+
+# 2) 编译原生桥接（首次会 clone Spine Runtime 3.8 到 vendor/，需要几分钟）
+.venv\Scripts\python build_runtime.py
+
+# 3) 运行桌宠
+.venv\Scripts\python pet.py
 ```
+
+第 2 步只在首次或 `spine_bridge.cpp` 改动后需要执行；DLL 按源码哈希命名，改过就会自动重编。
+
+## 目录结构
+
+```
+pet.py                 桌宠窗口、右键菜单、命令行入口
+spine_view.py          Spine 封装 + 模型扫描 + 适配计算 + 可复用 GL 控件
+settings_window.py     独立设置窗口
+spine_bridge.cpp       C 桥接层（调 Spine C Runtime，导出顶点流与诊断接口）
+build_runtime.py       拉取并编译 Spine C Runtime，链接出桥接 DLL
+test_prototype.py      自动化测试
+requirements.txt       PySide6-Essentials
+src/assets/            模型资源（共享数据，随仓库提供）
+legacy/                旧 Vue/Electron 实现（存档，不维护）
+.build/  vendor/  .venv/   生成物与依赖，不入库
+```
+
+## 操作说明
+
+- **左键拖动**移动窗口
+- **右键**打开菜单：`设置` / `关闭桌宠`
+
+## 设置窗口
+
+右键 → `设置`。窗口结构对齐旧版 `SettingsPanel.vue`，配色也沿用（`#fffdf5` 面板、`#c47758` 强调色）：
+
+```
+SETTINGS / 设置                                              ×
+┌──────────────────┐  当前人物
+│   模型预览        │  艾雅法拉
+│  （实时动画）      │  三丽鸥家族_II
+└──────────────────┘  皮肤 / 图集 / 骨骼 / 类型 / 资源
+当前模型预览
+
+[更换人物] [更换皮肤] [偏好]
+─────────────────────────────
+ (可滚动的内容区)
+─────────────────────────────
+确认更换为                        [ 确认更换 ]
+艾雅法拉 / 默认服装
+```
+
+- **更换人物**：424 个角色全部列在可滚动列表里，支持按名称搜索；选中后确认会切到该角色的
+  「默认服装」。
+- **更换皮肤**：当前角色的皮肤列表，同样可搜索；重名皮肤会用目录名区分。
+- **偏好**：**人物大小**滑块（0.5×–2.0×），实时生效；另有「桌面活动气泡」占位说明。
+
+模型切换是**热切换**：桌宠窗口与预览会即时换掉骨骼、图集和贴图，无需重启，旧实例会被释放。
+标题栏可拖动窗口（等价于旧版的 `-webkit-app-region: drag`）。
+
+## 调整大小
+
+各模块顶部都有带注释的「可调参数」区块。
+
+| 常量 | 位置 | 含义 |
+| --- | --- | --- |
+| `DEFAULT_WINDOW_WIDTH` / `DEFAULT_WINDOW_HEIGHT` | `pet.py` | 桌宠窗口尺寸（逻辑像素，默认 320×400） |
+| `DEFAULT_DISPLAY_SCALE` | `spine_view.py` | 人物占窗口的比例 |
+| `DISPLAY_SCALE_MIN` / `MAX` / `STEP` | `spine_view.py` | 大小滑块的范围与步进 |
+| `SETTINGS_WINDOW_WIDTH` / `SETTINGS_WINDOW_HEIGHT` | `settings_window.py` | 设置窗口尺寸（默认 620×620） |
+
+改人物大小的三种方式：
+
+1. **设置窗口** → 偏好 → 人物大小（实时，推荐）
+2. **命令行**：
+   ```powershell
+   # 360x450 的窗口，人物比适配尺寸再放大 30%
+   .venv\Scripts\python pet.py --size 360x450 --scale 1.3
+   ```
+3. **改常量**：编辑上表中的值
+
+人物始终会自动适配并居中于给定窗口，窗口缩放时也会重新适配。注意取舍：**窗口调大意味着透明
+区域也变大**，会挡住更多桌面点击；想要"人物大但点击区域紧凑"，应该调 `--scale` 而不是窗口尺寸。
+
+### 命令行参数
+
+```
+--skeleton PATH     指定模型（.skel，需同名 .atlas/.png）
+--fit idle|all      idle：只用待机动画定标（默认，人物更大）
+                    all ：所有动画取并集（任何动作都不越界，但人物更小）
+--size WxH          窗口尺寸（逻辑像素）
+--scale N           人物显示比例
+--animation NAME    启动时播放的动画
+--version           显示版本号
+```
+
+## 自适应缩放（为什么人物会显得小）
+
+Spine 模型的"顶点流范围"和"实际看得见的范围"不是一回事。真实工程里普遍存在隐藏附件
+（alpha 为 0 的配件、被停用的分支、缩放到 0 的占位图形），它们的顶点仍会出现在顶点流里。
+若把它们当成"画得出来"的几何来测量，包围盒会被拉宽、中心会偏移，自适应缩放就会**同时算错
+比例和位置**——人物又小又偏。远处的裁剪/特效附件也有同样效果。
+
+因此渲染层只统计可见几何（alpha > 0 且非退化三角形），并按待机动画整段采样取并集定标，
+这样人物既不会随动画摆动而抖动，也不会被自己的大动作裁掉。
+
+以 `build_char_180_amgoat_sanrio_2` 为例（`Relax` 姿态）：
+
+| 测量项 | 数值 |
+| --- | --- |
+| 全部三角形的顶点流范围 | 499.0 × 465.1 单位 |
+| 仅可见几何 | 215.1 × 465.1 单位 |
+| 隐藏附件导致的中心偏移 | +142.0 单位 |
+| 默认定标用的待机动画并集 | 313.6 × 509.6 单位 |
+| `--fit all` 的全动画并集 | 903.5 × 747.1 单位 |
+
+该模型 1574 个三角形里有 139 个不可见，且集中在角色左侧——这就是以前人物偏右的原因。
+
+## 渲染保真度
+
+渲染结果与旧版 pixi-spine 参考帧做过逐像素比对（`antialias: true`、同样的 `fitModel()` 数学、
+`Relax` 在 t = 1.000s、512×640）。套用相同变换后，两者的几何完全一致：轮廓同为 144×312、
+包围盒相同、没有亚像素偏移（dx = dy = 0 为最优，偏移 1px 误差约 3 倍）。纹理过滤双方均为
+`LINEAR`/`LINEAR`；mipmap 与抗锯齿都实测过，都不会让匹配更好。
+
+**区域附件 UV（已修复）**：区域附件的 UV 曾被多做一个 `{2,3,0,1}` 重排，而顶点与 UV 的角点
+顺序本来就一致，导致每个区域附件的贴图错开一个角点。普通区域恰好无害，但图集里
+`rotate: true` 打包的区域（该模型 160 个区域中有 70 个）会取到相邻角点的 UV，表现为鞋子只剩
+深色块、手部细节丢失。修复后：
+
+| | 平均通道差 | 偏差 >64 的像素 | 偏差 >160 的像素 |
+| --- | --- | --- | --- |
+| 修复前 | 15.02 | 1946 | 587 |
+| 修复后 | 7.68 | 407 | **0** |
+
+`test_prototype.py` 里有对应的回归测试（遍历输出三角形流，校验区域四边形的 `u` 随屏幕 x 递增）。
+
+当前支持：单页图集、normal/additive/multiply/screen 混合模式、区域/网格附件、Spine 裁剪附件。
+逐顶点着色与特殊图集布局仍需单独验证。
+
+渲染层**刻意不画任何叠加层**：没有 FPS 或动画名标签（透明窗口上文字会留下可见背景块），
+帧率与 GL 错误只写入 `stderr`。
 
 ## 本地模型库
 
-模型来自 [Ark-Models](https://github.com/isHarryh/Ark-Models) 的 `models/` 目录，按 [models_data.json](src/assets/models_data.json) 的映射整理成两级目录：
+模型来自 [Ark-Models](https://github.com/isHarryh/Ark-Models) 的 `models/` 目录，按
+[models_data.json](src/assets/models_data.json) 的映射整理成两级目录：
 
 ```
 src/assets/<角色名>/<皮肤名>/<模型文件>
 src/assets/阿米娅/默认服装/build_char_002_amiya.skel | .atlas | .png
-src/assets/斯卡蒂/珊瑚海岸_III/build_char_263_skadi_summer_3.skel | .atlas | .png
 ```
 
 命名规则：
 
 - 角色目录取 `models_data.json` 中该条目的 `name`，皮肤目录取 `skinGroupName`。
-- 文件名沿用 `assetList` 中的资源名（`assetId`），但会把 `\ / : * ? " < > | # %` 等文件系统与 URL 不安全字符替换为 `_`（例如 `build_char_263_skadi_summer#3.png` → `build_char_263_skadi_summer_3.png`）。
+- 文件名沿用 `assetList` 中的资源名（`assetId`），但会把 `\ / : * ? " < > | # %` 等文件系统与
+  URL 不安全字符替换为 `_`（例如 `build_char_263_skadi_summer#3.png` →
+  `build_char_263_skadi_summer_3.png`）。桥接层读取贴图时也会把 `#` 退回 `_`，以兼容图集里
+  仍写着原始名字的情况。
 - 同一角色内皮肤重名时追加 `_2`、`_3` 后缀；骨架缺扩展名的文件按内容补全为 `.skel` 或 `.json`。
 
-`src/assets` 已纳入版本管理，模型随仓库提供，克隆后即可直接切换。
+`src/assets` 已纳入版本管理（约 618MB / 2809 个文件），克隆后即可直接使用。
 
-## 设置页
+## 测试
 
-在人物上点击右键，选择“设置”，会打开一个**独立的设置窗口**：它与桌宠是两个分开的窗口，拖动它不会带动桌宠，桌宠的尺寸与位置也不受它影响。在设置窗口里可以：
-
-- 看到**当前模型预览**（实时播放待机动画）与当前人物的基本信息：角色名、英文名、皮肤、皮肤组、类型、样式、稀有度、资源文件名。
-- 在“更换人物”分区里按角色名筛选（支持中文，共 425 个角色），选中后确认：会切换到该角色的默认皮肤。
-- 在“更换皮肤”分区里切换当前角色的皮肤（每个角色 1～8 套）。
-- 在“偏好”分区里开关桌面活动气泡。
-
-窗口标题栏是拖动区域（右侧 × 按钮不参与拖动，可直接点关闭）；窗口高度按屏幕工作区自适应，**“确认更换”固定在窗口底部**，模型列表再长也只在列表区滚动，不会把确认按钮顶出可视区。
-
-两个更换分区确认后都会自动修改 [AmiyaModel.vue](src/components/AmiyaModel.vue) 顶部的三行资源路径，并重新加载**桌宠窗口与设置窗口**（导入路径是编译期常量，必须整页重载才能生效；重载后设置窗口的预览与信息会同步到新模型）。
-
-再次选择“设置”时会复用已打开的设置窗口并刷新其中的数据；关闭设置窗口不影响桌宠，关闭桌宠则会退出整个应用。
-
-人物信息取自 `src/assets/models_data.json`：应用按骨架资源名（忽略大小写、忽略 `#` 等字符的替换差异）反查该索引；索引缺失时只显示目录名等本地信息，不影响切换。
-
-如果需要手动修改，直接将三行路径中的目录与文件名改为目标模型后，重启开发服务即可：
-
-```ts
-import skeletonUrl from '../assets/角色/皮肤/模型.skel?url'
-import atlasUrl from '../assets/角色/皮肤/模型.atlas?url'
-import textureUrl from '../assets/角色/皮肤/模型.png?url'
+```powershell
+.venv\Scripts\python test_prototype.py
 ```
 
-三行路径必须来自同一个模型目录，并且文件名要完全对应。
+覆盖模型加载、动画推进、裁剪附件、备用模型、批绘制顺序、透明 GL 表面，以及区域 UV 采样的
+回归测试。
 
-## 桌面活动气泡
+## Spine Runtime 授权
 
-桌宠会感知当前正在使用的前台应用，并在应用切换时在人物旁边弹出一条聊天气泡，约 8 秒后自动收起。
+Spine Runtime 源码来自 Esoteric Software 官方 3.8 分支，**不随本仓库分发**，由
+`build_runtime.py` 在首次构建时拉取到 `vendor/`（该目录不入库）。分发集成了 Spine Runtime 的
+应用前，请阅读上游 `spine-c/LICENSE` 与 Spine Runtime 授权条款。集成 Spine Runtime 的产品
+使用者需要满足 Esoteric Software 的授权要求。
 
-- 只读取前台**进程名**，不读取窗口标题；类别与进程名的对应关系见 [activity.ts](electron/activity.ts) 里的 `categoryDefinitions`。
-- 可在「设置 → 偏好」里开启或关闭该功能；关闭时不再检测前台应用（检测用的进程也会结束）。该偏好保存在 `userData/settings.json`，重启后依然生效。
-- 轮询间隔为 `activityPollIntervalMs`（默认 3 秒），因此切换应用后气泡最多晚 3 秒出现。
-- 显示气泡时窗口会临时横向加宽，**桌宠在屏幕上的位置不会移动**；右侧空间不足时气泡自动出现在人物左侧。
-- 气泡是通用消息面板：主进程任意位置调用 `pushBubble({ source, icon, title, detail })` 即可推送，活动检测只是当前唯一的生产者，便于后续扩展提醒、对话等功能。
+## legacy：旧 Vue/Electron 实现
 
+`legacy/` 存放 0.6.x 的 Vue 3 + Electron + pixi-spine 实现（`legacy/src`、`legacy/electron`、
+`legacy/vite.config.ts` 等）。**它已不再维护**，且由于构建配置被移动到子目录、模型资源仍位于
+根目录 `src/assets`，它不能直接构建，仅作代码参考；如需运行旧版请切回 `main` 分支。
+
+旧版实现过的、Python 版**尚未迁移**的功能：桌面活动气泡（前台应用检测）、自动走动与休息、
+系统空闲睡眠、鼠标穿透。
