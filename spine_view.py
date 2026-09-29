@@ -29,7 +29,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 
 # 版本号。发布时同步更新 package.json 与 CHANGELOG.md。
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 
 # 目录约定：这些文件都位于仓库根目录，模型资源在 <root>/src/assets，
 # 编译产物在 <root>/.build，Spine C Runtime 源码在 <root>/vendor。
@@ -264,6 +264,23 @@ def pack_triangle_vertices(values: bytes) -> tuple[bytes, list[tuple[int, int, i
     return bytes(vertices), batches
 
 
+def _point_in_triangle(
+    point: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+) -> bool:
+    """叉积法判断点是否在三角形内（含边界）。"""
+    def cross(o, p, q):
+        return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+    d1 = cross(point, a, b)
+    d2 = cross(point, b, c)
+    d3 = cross(point, c, a)
+    has_neg = d1 < 0 or d2 < 0 or d3 < 0
+    has_pos = d1 > 0 or d2 > 0 or d3 > 0
+    return not (has_neg and has_pos)
+
+
 def fit_rect_from_bounds(
     bounds: tuple[float, float, float, float],
     width: int,
@@ -471,6 +488,42 @@ class SpineGLView(QOpenGLWidget):
     def set_facing_left(self, facing_left: bool) -> None:
         self.facing_left = facing_left
         self.update()
+
+    def hit_test(self, position: QPoint) -> bool:
+        """判断控件坐标 position 是否落在人物**可见几何**上（用于光标反馈与点击判定）。
+
+        与渲染用同一套变换（fit_center_scale + facing_left），把顶点流里的可见
+        三角形映射到控件坐标后做点在三角形内测试。透明区域不算命中——
+        这正是"只统计可见几何"策略的另一个受益点。
+        """
+        if self.fit_center_scale is None:
+            return False
+        center_x, center_y, scale = self.fit_center_scale
+        facing = -1.0 if self.facing_left else 1.0
+        px, py = position.x(), position.y()
+        # 控件坐标 → 模型坐标（顶点着色器的逆变换；y 轴方向一致，无需翻转）。
+        mx = px / (scale * facing) + center_x if scale > 0 else 0.0
+        my = py / scale + center_y if scale > 0 else 0.0
+
+        values = self.bridge.triangles()
+        triangle_count = len(values) // BYTES_PER_TRIANGLE
+        for triangle in range(triangle_count):
+            start = triangle * BYTES_PER_TRIANGLE
+            # 与 bounds_from_triangles 一致：任一顶点 alpha <= 0 的三角形不可见，跳过。
+            vertices = []
+            visible = True
+            for v in range(3):
+                offset = start + v * FLOATS_PER_VERTEX * BYTES_PER_FLOAT
+                x, y, _, _, _, _, a, _ = struct.unpack_from("<ffffffff", values, offset)
+                if a <= 0.0:
+                    visible = False
+                    break
+                vertices.append((x, y))
+            if not visible:
+                continue
+            if _point_in_triangle((mx, my), vertices[0], vertices[1], vertices[2]):
+                return True
+        return False
 
     def set_model(self, bridge: SpineBridge, texture_path: Path) -> None:
         """换一个模型。GL 纹理必须在当前上下文中销毁后再重建。"""

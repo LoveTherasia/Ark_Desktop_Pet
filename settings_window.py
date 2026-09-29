@@ -122,6 +122,7 @@ class SettingsWindow(QWidget):
     """设置窗口。模型切换通过 model_selected 回调交给主程序执行。"""
 
     size_changed = Signal(float)
+    bubble_toggled = Signal(bool)
 
     def __init__(
         self,
@@ -449,7 +450,7 @@ class SettingsWindow(QWidget):
         card_column.addWidget(reset_button, alignment=Qt.AlignmentFlag.AlignLeft)
         column.addWidget(card)
 
-        # ---- 其它偏好（原型目前没有对应功能，保留位置并说明） ----
+        # ---- 桌面活动气泡开关 ----
         other = QFrame()
         other.setObjectName("card")
         other_column = QVBoxLayout(other)
@@ -459,12 +460,22 @@ class SettingsWindow(QWidget):
         other_title.setObjectName("cardTitle")
         other_column.addWidget(other_title)
         other_desc = QLabel(
-            "Vue 版本会在切换前台应用时于人物旁弹出气泡提示。"
-            "这个原型还没有实现该功能，因此这里暂不提供开关。"
+            "切换前台应用时在人物旁弹出气泡提示。关闭后不再弹出，同时停止前台应用检测。"
         )
         other_desc.setObjectName("cardDesc")
         other_desc.setWordWrap(True)
         other_column.addWidget(other_desc)
+
+        toggle_row = QHBoxLayout()
+        toggle_row.addStretch(1)
+        self.bubble_toggle = QPushButton("已开启")
+        self.bubble_toggle.setObjectName("linkButton")
+        self.bubble_toggle.setCheckable(True)
+        self.bubble_toggle.setChecked(True)
+        self.bubble_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bubble_toggle.toggled.connect(self._on_bubble_toggled)
+        toggle_row.addWidget(self.bubble_toggle)
+        other_column.addLayout(toggle_row)
         column.addWidget(other)
 
         # 底部留白，避免滚动到底时最后一行的边框贴着窗口边缘。
@@ -909,6 +920,17 @@ class SettingsWindow(QWidget):
         scale = ticks_to_scale(ticks)
         self.size_value.setText(f"{scale * 100:.0f}%")
         self.size_changed.emit(scale)
+
+    def set_bubble_enabled(self, enabled: bool) -> None:
+        """同步气泡开关的选中态（不触发信号，供启动恢复时调用）。"""
+        self.bubble_toggle.blockSignals(True)
+        self.bubble_toggle.setChecked(enabled)
+        self.bubble_toggle.setText("已开启" if enabled else "已关闭")
+        self.bubble_toggle.blockSignals(False)
+
+    def _on_bubble_toggled(self, checked: bool) -> None:
+        self.bubble_toggle.setText("已开启" if checked else "已关闭")
+        self.bubble_toggled.emit(checked)
 
     def show_error(self, message: str) -> None:
         self.error_label.setText(message)
