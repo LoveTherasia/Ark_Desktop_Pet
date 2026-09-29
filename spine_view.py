@@ -29,7 +29,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 
 # 版本号。发布时同步更新 package.json 与 CHANGELOG.md。
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 # 目录约定：这些文件都位于仓库根目录，模型资源在 <root>/src/assets，
 # 编译产物在 <root>/.build，Spine C Runtime 源码在 <root>/vendor。

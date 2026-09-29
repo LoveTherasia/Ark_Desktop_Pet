@@ -1,7 +1,7 @@
 {
   "name": "ark-desktop-pet",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "ArkPet 桌宠 —— 0.7.0 起改用 Python + PySide6 + Spine C Runtime 实现",
   "scripts": {

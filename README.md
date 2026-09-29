@@ -2,7 +2,7 @@
 
 明日方舟人物桌宠。**0.7.0 起改用 Python 实现**：Python + PySide6 + 官方 Spine 3.8 C Runtime。
 
-当前版本：`0.7.0`（`py` 分支）。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：`0.7.1`（`py` 分支）。版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 > 旧的 Vue 3 + Electron + pixi-spine 实现已移入 [`legacy/`](legacy/) 目录存档，**不再维护**，
 > 仅保留用于回滚与对照。下文描述的都是当前的 Python 实现。
