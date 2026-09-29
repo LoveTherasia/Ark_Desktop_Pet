@@ -36,7 +36,14 @@ class BubbleWindow(QWidget):
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.hide)
+        self._timer.timeout.connect(self.hide_bubble)
+
+        # 跟随定时器：气泡显示期间桌宠会移动（拖动、自主走动），气泡要贴着它走。
+        # 用轮询而不是事件：桌宠的移动来自 move()（拖动/走动 tick），没有统一的
+        # 信号可接；16ms 轮询与渲染帧率一致，开销可忽略。
+        self._follow_timer = QTimer(self)
+        self._follow_timer.setInterval(16)
+        self._follow_timer.timeout.connect(self._reposition)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 8, 10, 8)
@@ -72,9 +79,11 @@ class BubbleWindow(QWidget):
         self.show()
         self.raise_()
         self._timer.start(BUBBLE_VISIBLE_MS)
+        self._follow_timer.start()
 
     def hide_bubble(self) -> None:
         self._timer.stop()
+        self._follow_timer.stop()
         self.hide()
 
     def _reposition(self) -> None:
@@ -99,7 +108,8 @@ class BubbleWindow(QWidget):
         if area is not None:
             x = max(area.x(), min(x, area.x() + area.width() - width))
         self._side = side
-        self.move(x, y)
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
 
     # ------------------------------------------------------------------ 绘制
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名

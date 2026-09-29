@@ -59,6 +59,10 @@ FALLBACK_CATEGORY = {"id": "other", "label": "其他应用", "icon": "🪟", "pr
 # 轮询间隔，与旧版 activityPollIntervalMs 一致。
 ACTIVITY_POLL_INTERVAL_MS = 3000
 
+# AI 回复触发概率：不是每次切换应用都问 AI（会太频繁、太贵），
+# 只有随机命中且冷却结束才会请求。0.2 = 每五次切换约触发一次。
+AI_REPLY_CHANCE = 0.2
+
 
 def classify_activity(process_name: str, self_process_names: list[str] | None = None) -> dict:
     """把进程名归类；桌宠自身单独归为 self，便于调用方忽略。"""
@@ -114,6 +118,8 @@ class ActivityWatcher:
         self._on_change = on_change
         self._self_process_names = self_process_names or []
         self._last_key = ""
+        # 切换计数：用于概率触发 AI 回复（不是每次切换都问）。
+        self._switch_count = 0
 
     def poll(self) -> None:
         """由外部定时器调用；前台应用变化时触发回调。"""
@@ -128,13 +134,16 @@ class ActivityWatcher:
         if key == self._last_key:
             return
         self._last_key = key
+        self._switch_count += 1
         # 空闲秒数只是快照附带数据（供后续"离开/回来"类功能），这里从 pet 延迟导入
         # 避免 pet -> activity 的循环导入。
         from pet import get_system_idle_seconds
-        self._on_change({
+        snapshot = {
             "category": category["id"],
             "label": category["label"],
             "icon": category["icon"],
             "process_name": process_name,
             "idle_seconds": get_system_idle_seconds(),
-        })
+            "switch_count": self._switch_count,
+        }
+        self._on_change(snapshot)

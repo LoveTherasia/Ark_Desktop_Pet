@@ -23,6 +23,11 @@ DEFAULT_SETTINGS = {
     "display_scale": 1.0,
     "position": None,
     "activity_bubble_enabled": True,
+    # AI 回复配置（OpenAI 兼容 API）。
+    "ai_enabled": False,
+    "ai_api_base": "https://api.openai.com/v1",
+    "ai_api_key": "",
+    "ai_model": "gpt-4o-mini",
 }
 
 

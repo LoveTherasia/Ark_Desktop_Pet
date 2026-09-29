@@ -23,7 +23,8 @@ from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication, QMenu
 
-from activity import ACTIVITY_POLL_INTERVAL_MS, ActivityWatcher
+from activity import ACTIVITY_POLL_INTERVAL_MS, AI_REPLY_CHANCE, ActivityWatcher
+from ai_reply import AIReplyService
 from app_settings import load_settings, save_settings, settings_path
 from bubble import BubbleWindow
 
@@ -31,6 +32,7 @@ from spine_view import (
     APP_ROOT,
     APP_VERSION,
     ASSETS,
+    BASE_MODEL_SCALE,
     BRIDGE_HASH,
     BRIDGE_SOURCE,
     BYTES_PER_FLOAT,
@@ -127,10 +129,11 @@ IDLE_SLEEP_POLL_INTERVAL_MS = 5000
 WALK_FIRST_DELAY_MS = 20000          # 启动后多久第一次尝试走动
 WALK_INTERVAL_MIN_MS = 60000         # 两次走动之间的随机间隔下限
 WALK_INTERVAL_MAX_MS = 180000        # 上限
-WALK_SPEED_PX_PER_SECOND = 40        # 走动速度（物理像素/秒，与旧版一致）
+WALK_SPEED_PX_PER_SECOND = 60        # 走动速度（像素/秒；旧版 40 偏慢，走 96px 要 2.4 秒
+                                     # 且不明显，提到 60 让"在走"一眼可辨）
 WALK_TICK_MS = 16                    # 走动动画帧间隔
-WALK_MIN_DISTANCE_PX = 24            # 单次走动距离下限
-WALK_MAX_DISTANCE_PX = 96            # 上限
+WALK_MIN_DISTANCE_PX = 60            # 单次走动距离下限（旧版 24 太短，几乎看不出移动）
+WALK_MAX_DISTANCE_PX = 200           # 上限（旧版 96；加长让走动更可感知）
 
 RELAX_FIRST_DELAY_MS = 35000         # 启动后多久第一次尝试休息
 RELAX_INTERVAL_MIN_MS = 45000        # 两次休息之间的随机间隔下限
@@ -141,6 +144,47 @@ RELAX_DURATION_MAX_MS = 16000        # 上限
 IDLE_SIT_DELAY_MS = 120000           # 空闲多久后可能坐下
 IDLE_SIT_CHANCE = 0.45               # 坐下的概率（不坐则重新计时）
 
+# ---- 走动行为丰富化 ----
+# 偶尔小跑：速度和距离都加大，像"急着去哪"的样子。
+WALK_RUN_CHANCE = 0.25               # 每次走动是小跑的概率
+WALK_RUN_SPEED_PX_PER_SECOND = 90    # 小跑速度（普通走动的 2.25 倍）
+WALK_RUN_DISTANCE_MIN_PX = 120       # 小跑距离下限
+WALK_RUN_DISTANCE_MAX_PX = 320       # 小跑距离上限
+# 走动中途停顿：像"走两步想起来什么"。
+WALK_PAUSE_CHANCE = 0.30             # 走动中途停一下的概率
+WALK_PAUSE_MS_MIN = 600              # 停顿时长下限
+WALK_PAUSE_MS_MAX = 1500             # 上限
+# 连续走动：一次结束后立刻再走一段（同方向），像"散步走远了"。
+WALK_CONTINUE_CHANCE = 0.20          # 走完继续走的概率
+WALK_CONTINUE_MAX_STREAK = 3         # 最多连续走几段
+
+# ---- 时间感知行为 ----
+# 深夜（0-6 点）：更困，待机偏好 Sit/Sleep，偶尔提醒休息。
+LATE_NIGHT_START_HOUR = 0
+LATE_NIGHT_END_HOUR = 6
+LATE_NIGHT_REMINDER_INTERVAL_MS = 30 * 60 * 1000  # 深夜提醒最小间隔（30 分钟）
+LATE_NIGHT_REMINDER_CHANCE = 0.5    # 检查点到时弹提醒的概率
+# 久坐提醒：连续活跃（非睡眠）超过该时长就提醒休息。
+WORK_REMINDER_INTERVAL_MS = 2 * 60 * 60 * 1000    # 2 小时
+# 时间感知检查间隔（分钟级足够，不需要频繁）。
+TIME_AWARENESS_POLL_MS = 60 * 1000
+
+# 深夜提醒台词（随机挑一句）。
+LATE_NIGHT_LINES = (
+    "博士，已经很晚了，该休息了……",
+    "这个时间还在工作吗？身体会撑不住的。",
+    "夜深了，明天再继续吧？",
+    "熬夜对身体不好哦，博士。",
+    "罗德岛的大家早就睡了，博士也早点休息吧。",
+)
+# 久坐提醒台词。
+WORK_REMINDER_LINES = (
+    "博士已经连续工作很久了，起来活动一下吧？",
+    "久坐对腰不好，站起来走走吧。",
+    "要不要喝杯水休息一下？",
+    "工作要劳逸结合哦，博士。",
+)
+
 # ---- 交互 ----
 # 点击桌宠时播放的动画（按优先级取第一个模型有的），对齐旧版 AmiyaModel.vue 的
 # playInteraction：['Interact', 'Move', 'Relax']。
@@ -148,6 +192,23 @@ INTERACT_ANIMATION_CANDIDATES = ("Interact", "Move", "Relax")
 # 交互动画播完后回到待机前的等待（毫秒）。Spine 动画时长可从桥接层查询，
 # 但这里用固定值更简单：交互动画通常 1-2 秒，播完循环一遍即可。
 INTERACT_HOLD_MS = 1500
+
+# ---- AI 回复功能总开关 ----
+# 实测体验不顺畅（回复延迟、内容与场景匹配度一般），暂时下线。
+# 代码、设置界面与持久化字段全部保留；想重新启用改回 True 即可。
+AI_FEATURE_ENABLED = False
+
+# ---- 待机动画轮换 ----
+# 待机动画池：回到待机时从中随机挑一个（避免连续重复）。很多模型有多套待机，
+# 固定播首选动画会显得呆板。池子取模型实际有的动画的交集。
+# 注意：
+#   - Default 不在池里：它是静止姿态（小人不动），播放它等于画面僵住；
+#   - Move / Special 是动作幅度较大的动画，随机播出来更像"活动一下"；
+#   - Sleep 不在池里：睡眠由系统空闲检测单独触发（_sync_sleep_state）。
+IDLE_ROTATION_POOL = ("Relax", "Sit", "Move", "Special")
+# 待机动画多久轮换一次（毫秒）。轮换只在"回到待机"的时机发生（走动/休息结束、
+# 交互结束），这个定时器保证即使一直待机也会偶尔换个姿势。
+IDLE_ROTATION_INTERVAL_MS = 45000
 
 
 class _LASTINPUTINFO(ctypes.Structure):
@@ -214,6 +275,14 @@ class PetWindow(SpineGLView):
         # 气泡窗口与活动检测由 main() 接线。
         self.bubble: BubbleWindow | None = None
         self.activity_bubble_enabled = True
+        # AI 回复配置（由 main() 从持久化恢复）。
+        # 注意：AI 功能当前被 AI_FEATURE_ENABLED 总开关关闭（体验不顺畅，暂时下线），
+        # 配置与设置界面保留，重新启用只需改回该常量。
+        self.ai_enabled = False
+        self.ai_api_base = ""
+        self.ai_api_key = ""
+        self.ai_model = ""
+        self.ai_service = AIReplyService()
         self._interact_timer = QTimer(self)
         self._interact_timer.setSingleShot(True)
         self._interact_timer.timeout.connect(self._resume_idle_animation)
@@ -269,6 +338,8 @@ class PetWindow(SpineGLView):
         if margin <= 0:
             return None
         # 不动点迭代求自洽的绘制比例：窗口 = 人物像素 + 留白。
+        # BASE_MODEL_SCALE 与 fit_rect_from_bounds 的最终放大保持一致，
+        # 否则窗口按旧比例算、人物按新比例画，会溢出窗口。
         scale = margin / min(bounds_width, bounds_height) / (1.0 - r)
         for _ in range(24):
             logical_width = bounds_width * scale + margin
@@ -277,6 +348,7 @@ class PetWindow(SpineGLView):
                 (logical_width * FIT_WIDTH_RATIO) / bounds_width,
                 (logical_height * FIT_HEIGHT_RATIO) / bounds_height,
             ) * FIT_SCALE
+        scale *= BASE_MODEL_SCALE
         # 窗口 = 人物像素 + 留白（逻辑像素），并留 1px 余量避免取整后贴边。
         logical_width = bounds_width * scale + margin + 1
         logical_height = bounds_height * scale + margin + 1
@@ -289,29 +361,36 @@ class PetWindow(SpineGLView):
 
         PET_CANVAS_MARGIN_PX 是物理像素，所以比例与窗口的物理尺寸挂钩；
         窗口尺寸变了就要重算（见 apply_canvas_size）。
+
+        注意：比例始终基于 model_bounds（定标基准，待机动画并集）而不是
+        当前动画的包围盒。窗口尺寸可以按当前动画调整（避免裁剪），但绘制
+        比例若跟着当前动画走，Special 这类可见范围很大的动画会把比例压小，
+        人物本体就会突然缩小——这正是要避免的。
         """
-        current = self.current_animation_bounds()
+        current = self.model_bounds
         if not current:
             return 0.0
         bounds_width, bounds_height = current[2], current[3]
         if bounds_width <= 0 or bounds_height <= 0:
             return 0.0
-        dpr = self.devicePixelRatioF() or 1.0
-        r = PET_CANVAS_RATIO
-        if r <= 0:
+        # 窗口尺寸取当前实际值：窗口按当前动画变大后，比例跟着窗口走，
+        # 人物在更大的窗口里保持同样的像素大小（留白变多但不缩小）。
+        window_width, window_height = self.width(), self.height()
+        if window_width <= 0 or window_height <= 0:
             return 0.0
+        dpr = self.devicePixelRatioF() or 1.0
         margin = PET_CANVAS_MARGIN_PX * PET_CANVAS_SAFETY * self.display_scale / dpr
         if margin <= 0:
             return 0.0
-        scale = margin / min(bounds_width, bounds_height) / (1.0 - r)
-        for _ in range(24):
-            logical_width = bounds_width * scale + margin
-            logical_height = bounds_height * scale + margin
-            scale = min(
-                (logical_width * FIT_WIDTH_RATIO) / bounds_width,
-                (logical_height * FIT_HEIGHT_RATIO) / bounds_height,
-            ) * FIT_SCALE
-        return scale
+        # 人物像素 = 窗口 - 留白（两轴取小，保证不裁剪）。
+        # 注意除以 BASE_MODEL_SCALE：本方法返回值会经 refit() 存入
+        # fit_scale_override，而 fit_rect_from_bounds 最终还会乘一次
+        # BASE_MODEL_SCALE，这里必须返回"未放大"的比例才能自洽。
+        scale = min(
+            (window_width - margin) / bounds_width,
+            (window_height - margin) / bounds_height,
+        ) / BASE_MODEL_SCALE
+        return max(scale, 0.0)
 
     def apply_canvas_size(self, reposition: bool = True) -> None:
         """按模型、当前动画与「人物大小」重算窗口尺寸。
@@ -372,6 +451,9 @@ class PetWindow(SpineGLView):
     # ------------------------------------------------------------------ 自主走动 / 休息
     def start_activity(self) -> None:
         """启动自主行为调度（走动 / 休息 / 空闲坐下），对齐旧版 App.vue 的 onMounted。"""
+        # 状态标志统一在这里初始化（start_idle_sleep_monitor 也会写 _sleeping，
+        # 但调用顺序不应成为隐含依赖）。
+        self._sleeping = getattr(self, "_sleeping", False)
         self._walking = False
         self._relaxing = False
         self._idle_sitting = False
@@ -389,6 +471,10 @@ class PetWindow(SpineGLView):
         self._idle_sit_timer.timeout.connect(self._maybe_idle_sit)
         self._walk_tick_timer = QTimer(self)
         self._walk_tick_timer.timeout.connect(self._walk_tick)
+        # 待机姿势定时轮换（只在纯待机状态下生效，见 _rotate_idle_animation）。
+        self._idle_rotation_timer = QTimer(self)
+        self._idle_rotation_timer.timeout.connect(self._rotate_idle_animation)
+        self._idle_rotation_timer.start(IDLE_ROTATION_INTERVAL_MS)
         self._schedule_walk(WALK_FIRST_DELAY_MS)
         self._schedule_relax(RELAX_FIRST_DELAY_MS)
         self._schedule_idle_sit()
@@ -404,6 +490,8 @@ class PetWindow(SpineGLView):
             self._schedule_walk()
             return
         self._stop_relaxing()
+        # 连续散步：上一段走完后按概率立刻再走一段（最多 WALK_CONTINUE_MAX_STREAK 段）。
+        self._walk_streak = getattr(self, "_walk_streak", 0)
         started = self._begin_walk()
         if started is None:
             self._schedule_walk()
@@ -426,6 +514,7 @@ class PetWindow(SpineGLView):
         """在工作区内随机走一小段。返回 (朝向, 时长ms)；没空间走则返回 None。
 
         距离会被左右剩余空间夹住，窗口不会走出屏幕（对齐旧版 main.ts 的 beginWalk）。
+        丰富化：偶尔小跑（更快更远）、连续散步时沿用上一段的方向。
         """
         screen = self.screen() or QApplication.primaryScreen()
         if screen is None:
@@ -436,12 +525,26 @@ class PetWindow(SpineGLView):
             return None
         left_room = self.x() - area.x()
         right_room = max_x - self.x()
-        if left_room >= WALK_MIN_DISTANCE_PX and right_room >= WALK_MIN_DISTANCE_PX:
+
+        # 连续散步沿用上一段方向（像真的在往某个方向走），否则随机/按空间选。
+        streak = getattr(self, "_walk_streak", 0)
+        last_direction = getattr(self, "_walk_last_direction", None)
+        if streak > 0 and last_direction:
+            direction = last_direction
+        elif left_room >= WALK_MIN_DISTANCE_PX and right_room >= WALK_MIN_DISTANCE_PX:
             direction = "left" if random.random() < 0.5 else "right"
         else:
             direction = "right" if right_room > left_room else "left"
         room = left_room if direction == "left" else right_room
-        wanted = random.randint(WALK_MIN_DISTANCE_PX, WALK_MAX_DISTANCE_PX)
+
+        # 偶尔小跑：更快更远。
+        running = random.random() < WALK_RUN_CHANCE
+        if running:
+            wanted = random.randint(WALK_RUN_DISTANCE_MIN_PX, WALK_RUN_DISTANCE_MAX_PX)
+            speed = WALK_RUN_SPEED_PX_PER_SECOND
+        else:
+            wanted = random.randint(WALK_MIN_DISTANCE_PX, WALK_MAX_DISTANCE_PX)
+            speed = WALK_SPEED_PX_PER_SECOND
         distance = min(room, wanted)
         if distance <= 0:
             return None
@@ -450,15 +553,40 @@ class PetWindow(SpineGLView):
         self._walk_to_x = round(from_x - distance if direction == "left" else from_x + distance)
         self._walk_y = self.y()
         self._walk_started_at = time.perf_counter()
-        duration_ms = max(1, round(distance / WALK_SPEED_PX_PER_SECOND * 1000))
+        duration_ms = max(1, round(distance / speed * 1000))
         self._walk_duration_ms = duration_ms
+        self._walk_running = running
+        self._walk_last_direction = direction
+        # 小跑中途不停顿（停顿会打断节奏）；普通走动偶尔停一下。
+        self._walk_pause_pending = (not running) and random.random() < WALK_PAUSE_CHANCE
         return direction, duration_ms
 
     def _walk_tick(self) -> None:
         progress = min(1.0, (time.perf_counter() - self._walk_started_at) * 1000 / self._walk_duration_ms)
         self.move(round(self._walk_from_x + (self._walk_to_x - self._walk_from_x) * progress), self._walk_y)
+        # 中途停顿：走到一半暂停一下（像"走两步想起来什么"），然后继续走完。
+        if self._walk_pause_pending and progress >= 0.5:
+            self._walk_pause_pending = False
+            self._walk_tick_timer.stop()
+            pause = QTimer(self)
+            pause.setSingleShot(True)
+            pause.timeout.connect(self._resume_walk_tick)
+            pause.start(random.randint(WALK_PAUSE_MS_MIN, WALK_PAUSE_MS_MAX))
+            return
         if progress >= 1.0:
             self._finish_walk()
+
+    def _resume_walk_tick(self) -> None:
+        """中途停顿结束后继续走：把剩余路程的时间重新折算。"""
+        if not self._walking:
+            return
+        remaining = (self._walk_to_x - self.x()) / max(
+            1.0, (self._walk_to_x - self._walk_from_x)
+        )
+        self._walk_duration_ms = max(1, int(self._walk_duration_ms * remaining))
+        self._walk_started_at = time.perf_counter()
+        self._walk_from_x = self.x()
+        self._walk_tick_timer.start(WALK_TICK_MS)
 
     def _finish_walk(self) -> None:
         if not self._walking:
@@ -470,6 +598,13 @@ class PetWindow(SpineGLView):
             fallback.stop()
             fallback.deleteLater()
             self._walk_fallback_timer = None
+        # 连续散步：按概率立刻再走一段（沿用方向），否则回到待机并正常调度。
+        streak = getattr(self, "_walk_streak", 0)
+        if streak < WALK_CONTINUE_MAX_STREAK and random.random() < WALK_CONTINUE_CHANCE:
+            self._walk_streak = streak + 1
+            QTimer.singleShot(300, self._try_walk)  # 稍作停顿再走，衔接自然
+            return
+        self._walk_streak = 0
         self._resume_idle_animation()
         self._schedule_walk()
 
@@ -526,22 +661,88 @@ class PetWindow(SpineGLView):
         self._schedule_idle_sit()
 
     # ---- 公共状态 ----
+    def _idle_rotation_candidates(self) -> list[str]:
+        """待机动画池：模型实际有的待机类动画（保持稳定顺序）。"""
+        return [name for name in IDLE_ROTATION_POOL if name in self.bridge.animations]
+
+    def _pick_idle_animation(self) -> str | None:
+        """从待机池随机挑一个，尽量避免与当前重复（池里只有一个时只能重复）。
+
+        深夜（0-6 点）偏好 Sit（更困的样子）。
+        """
+        candidates = self._idle_rotation_candidates()
+        if not candidates:
+            return preferred_idle_animation(self.bridge.animations)
+        if len(candidates) > 1 and self.current_animation in candidates:
+            candidates = [name for name in candidates if name != self.current_animation]
+        if self._is_late_night() and "Sit" in candidates:
+            return "Sit"
+        return random.choice(candidates)
+
+    def _rotate_idle_animation(self) -> None:
+        """定时轮换待机姿势：只在纯待机状态下换，走动/休息/睡眠/坐下不打扰。"""
+        if self._sleeping or self._walking or self._relaxing or self._idle_sitting:
+            return
+        if self._interact_timer.isActive():
+            return
+        name = self._pick_idle_animation()
+        if name and name != self.current_animation:
+            self.set_animation(name)
+
     def _resume_idle_animation(self) -> None:
-        """走动/休息结束后回到当前该播的动画（空闲坐下时是 Sit，否则首选待机）。"""
+        """走动/休息结束后回到当前该播的动画（空闲坐下时是 Sit，否则从待机池随机挑）。"""
         if self._sleeping:
             return
         if self._idle_sitting and "Sit" in self.bridge.animations:
             self.set_animation("Sit")
             return
-        fallback = preferred_idle_animation(self.bridge.animations)
-        if fallback:
-            self.set_animation(fallback)
+        name = self._pick_idle_animation()
+        if name:
+            self.set_animation(name)
 
     def _stop_activities(self) -> None:
         """入睡或用户交互时停掉所有自主行为并复位调度。"""
         self._stop_walking()
         self._stop_relaxing()
         self._reset_idle_animation()
+
+    # ------------------------------------------------------------------ 时间感知
+    def start_time_awareness(self) -> None:
+        """启动时间感知：深夜状态、深夜提醒、久坐提醒。"""
+        self._last_late_night_reminder = 0.0
+        self._last_work_reminder = time.monotonic()
+        self._time_awareness_timer = QTimer(self)
+        self._time_awareness_timer.timeout.connect(self._check_time_behaviors)
+        self._time_awareness_timer.start(TIME_AWARENESS_POLL_MS)
+        self._check_time_behaviors()
+
+    @staticmethod
+    def _is_late_night() -> bool:
+        """深夜（0-6 点）：桌宠表现得更容易困。"""
+        hour = time.localtime().tm_hour
+        return LATE_NIGHT_START_HOUR <= hour < LATE_NIGHT_END_HOUR
+
+    def _check_time_behaviors(self) -> None:
+        """每分钟检查一次：深夜提醒、久坐提醒。"""
+        now = time.monotonic()
+        # 深夜提醒：0-6 点且距上次提醒超过间隔，按概率弹气泡。
+        if (
+            self._is_late_night()
+            and not self._sleeping
+            and now - self._last_late_night_reminder >= LATE_NIGHT_REMINDER_INTERVAL_MS
+            and random.random() < LATE_NIGHT_REMINDER_CHANCE
+        ):
+            self._last_late_night_reminder = now
+            self.push_bubble("🌙", random.choice(LATE_NIGHT_LINES))
+        # 久坐提醒：连续活跃超过 2 小时（睡眠会重置计时）。
+        if not self._sleeping and now - self._last_work_reminder >= WORK_REMINDER_INTERVAL_MS:
+            self._last_work_reminder = now
+            self.push_bubble("☕", random.choice(WORK_REMINDER_LINES))
+
+    def _on_sleep_state_changed_for_time(self, sleeping: bool) -> None:
+        """睡眠状态变化时重置久坐计时（睡着不算久坐）。"""
+        if sleeping:
+            self._last_work_reminder = time.monotonic()
 
     # ------------------------------------------------------------------ 空闲睡眠
     def start_idle_sleep_monitor(self) -> None:
@@ -558,6 +759,9 @@ class PetWindow(SpineGLView):
         if sleeping == self._sleeping:
             return
         self._sleeping = sleeping
+        # 通知时间感知：睡眠会重置久坐计时。
+        if hasattr(self, "_on_sleep_state_changed_for_time"):
+            self._on_sleep_state_changed_for_time(sleeping)
         if sleeping:
             # 入睡：停掉走动/休息/坐下，记住入睡前的动画。
             self._stop_activities()
@@ -658,6 +862,43 @@ class PetWindow(SpineGLView):
         if not self.activity_bubble_enabled or self.bubble is None:
             return
         self.bubble.show_bubble(icon, title, detail)
+
+    # ------------------------------------------------------------------ AI 回复
+    def set_ai_config(self, enabled: bool, api_base: str, api_key: str, model: str) -> None:
+        """设置窗口保存 AI 配置后的回调。"""
+        self.ai_enabled = enabled
+        self.ai_api_base = api_base.strip()
+        self.ai_api_key = api_key.strip()
+        self.ai_model = model.strip()
+
+    def maybe_ai_reply(self, snapshot: dict) -> None:
+        """前台应用切换时按概率请求一句 AI 回复。
+
+        不是每次切换都问（AI_REPLY_CHANCE 概率 + 服务内置 60 秒冷却），
+        避免频繁切换应用时请求轰炸。气泡开关关闭时也不问。
+        AI_FEATURE_ENABLED 总开关关闭时直接返回（功能暂时下线）。
+        """
+        if not AI_FEATURE_ENABLED:
+            return
+        if not self.ai_enabled or not self.activity_bubble_enabled:
+            return
+        if random.random() >= AI_REPLY_CHANCE:
+            return
+        user_message = (
+            f"用户切换到了{snapshot['label']}（进程 {snapshot['process_name']}），"
+            f"这是今天的第 {snapshot['switch_count']} 次应用切换。"
+        )
+
+        def on_success(reply: str) -> None:
+            self.push_bubble("✨", reply)
+
+        def on_error(message: str) -> None:
+            print(f"[ArkPet] AI reply failed: {message}", file=sys.stderr)
+
+        self.ai_service.request(
+            self.ai_api_base, self.ai_api_key, self.ai_model, user_message,
+            on_success=on_success, on_error=on_error,
+        )
 
 
 def parse_size_option(value: str) -> tuple[int, int]:
@@ -783,6 +1024,13 @@ def main() -> int:
                 window.move(x, y)
         # 气泡开关。
         window.set_activity_bubble_enabled(bool(saved.get("activity_bubble_enabled", True)))
+        # AI 回复配置。AI_FEATURE_ENABLED 关闭时强制禁用（忽略持久化里的旧值）。
+        window.set_ai_config(
+            AI_FEATURE_ENABLED and bool(saved.get("ai_enabled", False)),
+            str(saved.get("ai_api_base", "")),
+            str(saved.get("ai_api_key", "")),
+            str(saved.get("ai_model", "")),
+        )
         # --animation 只在启动时指定一次；之后不再通过菜单切换，与 Vue 版本一致。
         if arguments.animation:
             bridge.require_animation(arguments.animation)
@@ -806,6 +1054,8 @@ def main() -> int:
 
         def on_activity(snapshot: dict) -> None:
             window.push_bubble(snapshot["icon"], snapshot["label"], snapshot["process_name"])
+            # 按概率触发 AI 评论（服务内部还有冷却，不会连着请求）。
+            window.maybe_ai_reply(snapshot)
 
         def sync_activity_watcher() -> None:
             """按气泡开关启停活动检测定时器。"""
@@ -835,6 +1085,10 @@ def main() -> int:
                 "display_scale": window.display_scale,
                 "position": [window.x(), window.y()],
                 "activity_bubble_enabled": window.activity_bubble_enabled,
+                "ai_enabled": window.ai_enabled,
+                "ai_api_base": window.ai_api_base,
+                "ai_api_key": window.ai_api_key,
+                "ai_model": window.ai_model,
             })
 
         application.aboutToQuit.connect(save_state)
@@ -845,6 +1099,8 @@ def main() -> int:
         window.start_idle_sleep_monitor()
         # 自主走动 / 休息 / 空闲坐下。
         window.start_activity()
+        # 时间感知：深夜提醒、久坐提醒、深夜待机偏好。
+        window.start_time_awareness()
         return application.exec()
     except (OSError, RuntimeError, ValueError) as error:
         if bridge:
@@ -918,6 +1174,8 @@ def install_settings(
     settings.bubble_toggled.connect(window.set_activity_bubble_enabled)
     # 启动时把持久化的开关状态同步到设置窗口。
     settings.set_bubble_enabled(window.activity_bubble_enabled)
+    settings.set_ai_config(window.ai_enabled, window.ai_api_base, window.ai_api_key, window.ai_model)
+    settings.ai_config_changed.connect(window.set_ai_config)
     # 设置窗口只是隐藏，真正销毁（app 退出）时才回收预览实例。
     settings.destroyed.connect(lambda _obj=None: release_bridges(preview_bridges))
     window.settings = settings

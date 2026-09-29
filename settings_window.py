@@ -17,6 +17,7 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from spine_view import (
+    BASE_MODEL_SCALE,
     DEFAULT_DISPLAY_SCALE,
     DISPLAY_SCALE_MAX,
     DISPLAY_SCALE_MIN,
@@ -55,8 +57,10 @@ SETTINGS_PREVIEW_HEIGHT = 144
 # 角色 / 皮肤列表的最小高度（含搜索框与提示行后，整页最小高度约 200px，
 # 正好放进窗口；窗口更高时列表会自动长高）。再小就会把提示行挤到列表上。
 OPTION_LIST_MIN_HEIGHT = 120
-# 预览里人物的显示比例（固定值，不跟随主窗口的「大小」）
-PREVIEW_DISPLAY_SCALE = 0.95
+# 预览里人物的显示比例（固定值，不跟随主窗口的「大小」）。
+# 除以 BASE_MODEL_SCALE 抵消全局基准放大：预览框是固定尺寸，
+# 人物跟着基准变大会超出预览框。
+PREVIEW_DISPLAY_SCALE = 0.95 / BASE_MODEL_SCALE
 # 设置面板配色，取自 Vue 版本 src/style.css
 PANEL_BACKGROUND = "#fffdf5"
 PANEL_BORDER = "rgba(47, 58, 74, 0.18)"
@@ -123,6 +127,7 @@ class SettingsWindow(QWidget):
 
     size_changed = Signal(float)
     bubble_toggled = Signal(bool)
+    ai_config_changed = Signal(bool, str, str, str)  # enabled, api_base, api_key, model
 
     def __init__(
         self,
@@ -477,6 +482,49 @@ class SettingsWindow(QWidget):
         toggle_row.addWidget(self.bubble_toggle)
         other_column.addLayout(toggle_row)
         column.addWidget(other)
+
+        # ---- AI 回复配置 ----
+        ai_card = QFrame()
+        ai_card.setObjectName("card")
+        ai_column = QVBoxLayout(ai_card)
+        ai_column.setContentsMargins(14, 12, 14, 12)
+        ai_column.setSpacing(8)
+
+        ai_title = QLabel("AI 智能回复")
+        ai_title.setObjectName("cardTitle")
+        ai_column.addWidget(ai_title)
+        ai_desc = QLabel(
+            "偶尔切换应用时，让 AI 以角色口吻评论一句并显示在气泡里。"
+            "使用 OpenAI 兼容 API（/v1/chat/completions）。\n"
+            "（该功能暂时下线调整中，配置保留但不会触发。）"
+        )
+        ai_desc.setObjectName("cardDesc")
+        ai_desc.setWordWrap(True)
+        ai_column.addWidget(ai_desc)
+
+        self.ai_enabled_check = QCheckBox("启用 AI 回复")
+        self.ai_enabled_check.toggled.connect(self._on_ai_changed)
+        ai_column.addWidget(self.ai_enabled_check)
+
+        def add_field(row_label: str, placeholder: str, echo_mode=None) -> QLineEdit:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            label = QLabel(row_label)
+            label.setFixedWidth(70)
+            field = QLineEdit()
+            field.setPlaceholderText(placeholder)
+            if echo_mode is not None:
+                field.setEchoMode(echo_mode)
+            field.textChanged.connect(self._on_ai_changed)
+            row.addWidget(label)
+            row.addWidget(field, stretch=1)
+            ai_column.addLayout(row)
+            return field
+
+        self.ai_base_field = add_field("API 地址", "https://api.openai.com/v1")
+        self.ai_key_field = add_field("API 密钥", "sk-...", QLineEdit.EchoMode.Password)
+        self.ai_model_field = add_field("模型", "gpt-4o-mini")
+        column.addWidget(ai_card)
 
         # 底部留白，避免滚动到底时最后一行的边框贴着窗口边缘。
         column.addStretch(1)
@@ -931,6 +979,30 @@ class SettingsWindow(QWidget):
     def _on_bubble_toggled(self, checked: bool) -> None:
         self.bubble_toggle.setText("已开启" if checked else "已关闭")
         self.bubble_toggled.emit(checked)
+
+    def set_ai_config(self, enabled: bool, api_base: str, api_key: str, model: str) -> None:
+        """同步 AI 配置表单（不触发信号，供启动恢复时调用）。"""
+        for field, value in (
+            (self.ai_enabled_check, enabled),
+            (self.ai_base_field, api_base),
+            (self.ai_key_field, api_key),
+            (self.ai_model_field, model),
+        ):
+            field.blockSignals(True)
+            if isinstance(value, bool):
+                field.setChecked(value)
+            else:
+                field.setText(value)
+            field.blockSignals(False)
+
+    def _on_ai_changed(self, *args) -> None:
+        """任一 AI 配置项变化时广播（主程序负责保存与生效）。"""
+        self.ai_config_changed.emit(
+            self.ai_enabled_check.isChecked(),
+            self.ai_base_field.text(),
+            self.ai_key_field.text(),
+            self.ai_model_field.text(),
+        )
 
     def show_error(self, message: str) -> None:
         self.error_label.setText(message)

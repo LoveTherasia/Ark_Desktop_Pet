@@ -29,7 +29,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 
 # 版本号。发布时同步更新 package.json 与 CHANGELOG.md。
-APP_VERSION = "0.7.2"
+APP_VERSION = "0.8.0"
 
 # 目录约定：这些文件都位于仓库根目录，模型资源在 <root>/src/assets，
 # 编译产物在 <root>/.build，Spine C Runtime 源码在 <root>/vendor。
@@ -52,6 +52,10 @@ DEFAULT_DISPLAY_SCALE = 1.0
 DISPLAY_SCALE_STEP = 0.15
 DISPLAY_SCALE_MIN = 0.5
 DISPLAY_SCALE_MAX = 2.0
+# 全局基准放大系数：把"人物大小 = 100%"的整体视觉尺寸放大 1.5 倍。
+# 之前的 150% 大小 = 现在的 100%。滑块/持久化值语义不变，只是基准变了；
+# 窗口尺寸计算（自动画布）会随比例同步放大，留白仍按物理像素控制。
+BASE_MODEL_SCALE = 1.5
 
 # 自适应缩放：可用区域占窗口的比例，再乘一个安全系数，避免贴边。
 FIT_WIDTH_RATIO = 0.86
@@ -306,6 +310,8 @@ def fit_rect_from_bounds(
             (width * FIT_WIDTH_RATIO) / bounds_width,
             (height * FIT_HEIGHT_RATIO) / bounds_height,
         ) * FIT_SCALE * display_scale
+    # 全局基准：把整体视觉尺寸放大 BASE_MODEL_SCALE 倍（100% = 旧版 150% 大小）。
+    scale *= BASE_MODEL_SCALE
     if scale <= 0:
         return None
     return (
@@ -340,8 +346,12 @@ def animation_bounds_union(
 
 
 def preferred_idle_animation(animations: list[str]) -> str | None:
-    """在模型提供的动画里挑一个待机动作。"""
-    for name in ("Relax", "Sit", "Move", "Default", "Sleep"):
+    """在模型提供的动画里挑一个待机动作。
+
+    Default 是静止姿态（小人不动），刻意排在最后只作兜底；
+    Relax 是最自然的待机动作，优先播放。
+    """
+    for name in ("Relax", "Sit", "Move", "Sleep", "Default"):
         if name in animations:
             return name
     return animations[0] if animations else None
